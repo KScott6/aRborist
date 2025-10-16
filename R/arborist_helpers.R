@@ -1,0 +1,448 @@
+# ============================================================
+# aRborist helper functions
+# ============================================================
+
+# Package setup
+required_packages <- c(
+  "rentrez","stringr","plyr","dplyr","withr","XML",
+  "data.table","tidyr","phylotools","scales",
+  "purrr","readr","phytools","RColorBrewer",
+  "maps","ggplot2","tidygeocoder","treeio",
+  "ggtree","ggrepel","taxize","Biostrings", "yaml"
+)
+
+installed_packages <- required_packages %in% rownames(installed.packages())
+if (any(installed_packages == FALSE)) {
+  install.packages(required_packages[!installed_packages])
+}
+
+load_required_packages <- function() {
+  invisible(lapply(required_packages, library, character.only = TRUE))
+}
+
+# defaults for metadata "keep" category
+# default keep-list if not provided by user
+if (!exists("metadata_categories_keep")) {
+  metadata_categories_keep <- c(
+    "GBSeq_locus","GBSeq_length","GBSeq_strandedness","GBSeq_moltype",
+    "GBSeq_update.date","GBSeq_create.date","GBSeq_definition",
+    "GBSeq_accession.version","GBSeq_project","GBSeq_organism","GBSeq_taxonomy",
+    "GBSeq_sequence","GBSeq_feature.table","_title","_journal","ref_id","pubmed"
+  )
+}
+
+# Project structure
+setup_project_structure <- function(base_dir = base_dir,
+                                    subdirs = c("intermediate_files", "metadata_files", "results_files",
+                                                "temp_files", "multifastas", "multifastas/aligned_fastas",
+                                                "multigene_tree", "multigene_tree/prep", "single_gene_trees")) {
+  project_dir <- file.path(base_dir, project_name)
+  if (!dir.exists(project_dir)) dir.create(project_dir)
+  for (dir in subdirs) {
+    full_path <- file.path(project_dir, dir)
+    if (!dir.exists(full_path)) dir.create(full_path, recursive = TRUE)
+  }
+  setwd(project_dir)
+}
+
+# Sleep helper (uses ncbi_api_key from global env)
+get_sleep_duration <- function() {
+  if (!is.null(ncbi_api_key) && nzchar(ncbi_api_key)) 0.3 else 0.5
+}
+if (exists("ncbi_api_key") && !is.null(ncbi_api_key) && nzchar(ncbi_api_key)) {
+  rentrez::set_entrez_key(ncbi_api_key)
+}
+
+# Fetch accessions from NCBI
+fetch_accessions_for_taxon <- function(taxon, max_acc = max_acc_per_taxa) {
+  cat("Searching term:", taxon, "\n")
+  filters <- paste0("(", taxon, "[All Fields] AND Fungi[Organism])")
+  # allows up to 9,999 ids without webhistory
+  search <- rentrez::entrez_search(db = "nucleotide", term = filters, retmax = 9999)
+  
+  if (length(search$ids) == 0) {
+  cat("No accessions found for:", taxon, "\n")
+  return(data.frame(Accession = character(0),
+                    genus = taxon,
+                    stringsAsFactors = FALSE))
+                    }
+                    
+  if ((length(search$ids)) == 9999) {
+    cat(taxon, "has >10,000 NCBI accessions. Using webhistory.\n")
+    large_search <- rentrez::entrez_search(db = "nucleotide", term = filters, use_history = TRUE)
+    temp_filename <- paste0("./temp_files/temp_file_accessions_from_", taxon, ".txt")
+
+    total_accession_count <- as.integer(large_search[["count"]])
+    max_acc <- ifelse(identical(max_acc, "max"), total_accession_count, as.numeric(max_acc))
+    cat(total_accession_count, "accessions available for", taxon, "- pulling a maximum of", max_acc, "\n")
+
+    for (seq_start in seq(0, max_acc - 1, by = 50)) {
+      recs <- rentrez::entrez_fetch(db = "nuccore",
+                                    web_history = large_search$web_history,
+                                    rettype = "acc", retmax = 50, retstart = seq_start)
+      cat(recs, file = temp_filename, append = TRUE)
+      Sys.sleep(get_sleep_duration())
+      cat(seq_start + 49, "accessions recorded\r")
+    }
+
+    large_temp_df <- read.table(temp_filename)
+    colnames(large_temp_df) <- c("Accession")
+    large_temp_df$genus <- taxon
+    if (file.exists(temp_filename)) file.remove(temp_filename)
+    cat("Accession retrieval for", taxon, "successful\n\n")
+    return(large_temp_df)
+
+  } else {
+    if (length(search$ids) <= 300) {
+      summary <- rentrez::entrez_summary(db = "nuccore", id = search$ids)
+      Sys.sleep(get_sleep_duration())
+    } else {
+      summary <- list()
+      index <- split(seq_along(search$ids), ceiling(seq_along(search$ids) / 300))
+      for (p in index) {
+        summary[p] <- rentrez::entrez_summary(db = "nuccore", id = search$ids[p])
+        Sys.sleep(get_sleep_duration())
+      }
+      class(summary) <- c("esummary_list", "list")
+    }
+
+    tempdf <- data.frame(Accession = unname(rentrez::extract_from_esummary(summary, "caption")), stringsAsFactors = FALSE)
+    tempdf$genus <- taxon
+    cat("Search complete for", taxon, "\n")
+    return(tempdf)
+  }
+}
+
+get_accessions_for_all_taxa <- function(taxa_list, max_acc_per_taxa) {
+  taxa_frame_acc <- list()
+
+  for (i in seq_along(taxa_list)) {
+    tryCatch({
+      term <- taxa_list[i]
+      tempdf <- fetch_accessions_for_taxon(term, max_acc = max_acc_per_taxa)
+
+      outfile_name <- paste0("./intermediate_files/Accessions_for_", term, ".csv")
+      write.csv(tempdf, outfile_name, row.names = FALSE, quote = FALSE)
+      taxa_frame_acc[[i]] <- tempdf
+
+    }, error = function(e) {
+      Sys.sleep(get_sleep_duration())
+      cat("ERROR:", conditionMessage(e), "\n")
+    })
+  }
+
+  accession_list <- do.call(rbind, taxa_frame_acc)
+  write.csv(accession_list, "./intermediate_files/all_pulled_accessions.csv", row.names = FALSE)
+  cat("All accessions retrieved and saved.\n")
+}
+
+
+# Metadata retrieval
+fetch_metadata_for_accession <- function(accession) {
+  out.xml <- rentrez::entrez_fetch(db = "nuccore", id = accession, rettype = "xml")
+  list.out <- XML::xmlToList(out.xml)
+  accession_dfs <- lapply(list.out, data.frame, stringsAsFactors = FALSE)
+  all_metadata_df <- accession_dfs[[1]]
+
+  # keep only selected categories
+  select_metadata_df <- all_metadata_df[, grep(paste(metadata_categories_keep, collapse = "|"),
+                                               x = names(all_metadata_df))]
+
+  # split basic info and feature table
+  basic_info_df <- select_metadata_df[, grep("GBSeq_locus|GBSeq_length|GBSeq_strandedness|GBSeq_update.date|GBSeq_create.date|GBSeq_definition|GBSeq_accession.version|GBSeq_project|GBSeq_organism|GBSeq_taxonomy|GBSeq_sequence",
+                                             x = names(select_metadata_df))]
+  feature_table_df <- select_metadata_df[, grep("GBSeq_feature.table", x = names(select_metadata_df))]
+
+  # transform feature qualifiers: use *_name values as column names
+  name_cols <- which(grepl("_name", colnames(feature_table_df)))
+  feature_transformed_df <- data.frame(feature_table_df[, name_cols + 1])
+  colnames(feature_transformed_df) <- feature_table_df[, name_cols]
+
+  metadata_entry <- cbind(basic_info_df, feature_transformed_df)
+  names(metadata_entry) <- sub("GBSeq_", "", names(metadata_entry))
+  data.table::setnames(metadata_entry, old = "locus", new = "Accession")
+  data.table::setnames(metadata_entry, old = "definition", new = "accession_title")
+
+  return(metadata_entry) 
+}
+
+retrieve_ncbi_metadata <- function(project_name) {
+  accession_list <- read.csv("./intermediate_files/all_pulled_accessions.csv", header = TRUE)
+  metadata_database_list <- list()
+
+  for (i in 1:nrow(accession_list)) {
+    tryCatch({
+      accession <- accession_list$Accession[i]
+      cat("Processing Accession:", accession, "\n")
+
+      metadata_entry <- fetch_metadata_for_accession(accession)
+      metadata_database_list[[i]] <- metadata_entry
+
+      cat("#", i, "Accession:", metadata_entry$Accession,
+          "| Species:", metadata_entry$organism,
+          "| Isolation:", metadata_entry$isolation_source,
+          "| Host:", metadata_entry$host, "\n")
+
+      Sys.sleep(get_sleep_duration())
+
+    }, error = function(e) {
+      Sys.sleep(get_sleep_duration())
+      cat("ERROR:", conditionMessage(e), "\n")
+    })
+  }
+
+  metadata_database <- plyr::rbind.fill(metadata_database_list)
+  write.csv(metadata_database, paste0("./metadata_files/all_accessions_pulled_metadata_", project_name, ".csv"),
+            row.names = FALSE)
+  cat("Metadata saved for project:", project_name, "\n")
+}
+
+
+# Custom sequences merge
+merge_metadata_with_custom_file <- function(project_name) {
+  metadata_file_path <- paste0("./metadata_files/all_accessions_pulled_metadata_", project_name, ".csv")
+  metadata_database <- read.csv(metadata_file_path, header = TRUE)
+
+  # if path is empty or missing, skip merge step
+  if (is.null(my_lab_sequences) || !nzchar(my_lab_sequences)) {
+    cat("No custom sequences file provided; skipping merge.\n")
+    return(invisible(NULL))
+  }
+
+  custom_sequences <- read.csv(my_lab_sequences, header = TRUE, fill = TRUE)
+
+  if (!all(c("Accession","strain","sequence","organism","gene") %in% colnames(custom_sequences))) {
+    stop("Custom file must contain at least 'Accession', 'strain', 'sequence', 'organism', and 'gene' columns.")
+  }
+
+  merged_data <- plyr::rbind.fill(metadata_database, custom_sequences)
+  write.csv(merged_data, metadata_file_path, row.names = FALSE)
+  cat("Merged custom sequences into:", metadata_file_path, "\n")
+}
+
+
+# Metadata curation and region selection
+curate_metadata <- function(project_name) {
+  metadata_file_path <- paste0("./metadata_files/all_accessions_pulled_metadata_", project_name, ".csv")
+  accession_list <- read.csv(metadata_file_path, header = TRUE)
+
+  # strain.standard naming priority: voucher > strain > isolate > Accession
+  accession_list <- accession_list %>%
+    dplyr::mutate(strain.standard = dplyr::coalesce(specimen_voucher, strain, isolate, Accession))
+
+  # strip punctuation/whitespace differences
+  remove_char <- c("\\>", "\\<", "\\s+", ":", ";", "_", "-", "\\.", "\\(", "\\)", "&", "\\|")
+  accession_list$strain.standard <- stringr::str_remove_all(accession_list$strain.standard, paste(remove_char, collapse = "|"))
+
+  # mark TYPE if ANYTHING in type_material category
+  accession_list$strain.standard.type <- ifelse(!is.na(accession_list$type_material),
+                                                paste(accession_list$strain.standard, ".TYPE", sep = ""),
+                                                accession_list$strain.standard)
+
+  # gene/product/title standardization (add/modify as needed - this is def not an exhaustive list)
+  accession_list$gene.standard <- accession_list$gene
+  accession_list <- accession_list %>%
+    dplyr::mutate(gene.standard = dplyr::case_when(
+      stringr::str_detect(gene.standard, stringr::regex("tef-*\\d*", ignore_case = TRUE)) ~ "TEF",
+      stringr::str_detect(gene.standard, stringr::regex("EF1-alpha", ignore_case = TRUE)) ~ "TEF",
+      stringr::str_detect(gene.standard, stringr::regex("ef1a", ignore_case = TRUE)) ~ "TEF",
+      stringr::str_detect(gene.standard, stringr::regex("b-tub", ignore_case = TRUE)) ~ "BTUB",
+      stringr::str_detect(gene.standard, stringr::regex("TUB2", ignore_case = TRUE)) ~ "BTUB",
+      stringr::str_detect(gene.standard, stringr::regex("RBP2", ignore_case = TRUE)) ~ "RPB2",
+      stringr::str_detect(gene.standard, stringr::regex("RPB2", ignore_case = TRUE)) ~ "RPB2",
+      stringr::str_detect(gene.standard, stringr::regex("RBP1", ignore_case = TRUE)) ~ "RPB1",
+      stringr::str_detect(gene.standard, stringr::regex("RPB1", ignore_case = TRUE)) ~ "RPB1",
+      stringr::str_detect(gene.standard, stringr::regex("act[16]", ignore_case = TRUE)) ~ "actin",
+      TRUE ~ gene.standard
+    ))
+
+  accession_list$product.standard <- accession_list$product
+  accession_list <- accession_list %>%
+    dplyr::mutate(product.standard = dplyr::case_when(
+      stringr::str_detect(product.standard, stringr::regex("elongation factor 1", ignore_case = TRUE)) ~ "TEF",
+      stringr::str_detect(product.standard, stringr::regex("18S", ignore_case = TRUE)) ~ "SSU",
+      stringr::str_detect(product.standard, stringr::regex("16S", ignore_case = TRUE)) ~ "SSU",
+      stringr::str_detect(product.standard, stringr::regex("26S", ignore_case = TRUE)) ~ "LSU",
+      stringr::str_detect(product.standard, stringr::regex("28S", ignore_case = TRUE)) ~ "LSU",
+      stringr::str_detect(product.standard, stringr::regex("actin beta", ignore_case = TRUE)) ~ "actin",
+      stringr::str_detect(product.standard, stringr::regex("beta-tubulin", ignore_case = TRUE)) ~ "BTUB",
+      stringr::str_detect(product.standard, stringr::regex("licensing\\D*7\\D*", ignore_case = TRUE)) ~ "MCM7",
+      stringr::str_detect(product.standard, stringr::regex("polymerase II larg[est]*", ignore_case = TRUE)) ~ "RPB1",
+      stringr::str_detect(product.standard, stringr::regex("polymerase II second largest", ignore_case = TRUE)) ~ "RPB2",
+      stringr::str_detect(product.standard, stringr::regex("small subunit ribosomal", ignore_case = TRUE)) ~ "SSU",
+      stringr::str_detect(product.standard, stringr::regex("^large[st]* subunit ribosomal", ignore_case = TRUE)) ~ "LSU",
+      stringr::str_detect(product.standard, stringr::regex("internal transcribed", ignore_case = TRUE)) ~ "ITS",
+      TRUE ~ product.standard
+    ))
+
+  accession_list$acc_title.standard <- accession_list$accession_title
+  accession_list <- accession_list %>%
+    dplyr::mutate(acc_title.standard = dplyr::case_when(
+      stringr::str_detect(acc_title.standard, stringr::regex("actin beta", ignore_case = TRUE)) ~ "actin",
+      stringr::str_detect(acc_title.standard, stringr::regex("beta-*\\s*tubulin", ignore_case = TRUE)) ~ "BTUB",
+      stringr::str_detect(acc_title.standard, stringr::regex("licensing\\D*7\\D*", ignore_case = TRUE)) ~ "MCM7",
+      stringr::str_detect(acc_title.standard, stringr::regex("RPB1", ignore_case = TRUE)) ~ "RPB1",
+      stringr::str_detect(acc_title.standard, stringr::regex("RPB2", ignore_case = TRUE)) ~ "RPB2",
+      stringr::str_detect(acc_title.standard, stringr::regex("internal transcribed.*complete sequence", ignore_case = TRUE)) ~ "ITS",
+      stringr::str_detect(acc_title.standard, stringr::regex("translation elongation", ignore_case = TRUE)) ~ "TEF",
+      TRUE ~ acc_title.standard
+    ))
+
+  accession_list <- accession_list %>%
+    dplyr::mutate(region.standard = dplyr::coalesce(gene.standard, product.standard, acc_title.standard))
+
+  accession_list$org_name <- gsub("\\s+", "\\.", accession_list$organism)
+  accession_list$fasta.header <- paste(">", accession_list$org_name, "_", accession_list$strain.standard, sep = "")
+  accession_list$fasta.header.type <- paste(">", accession_list$org_name, "_", accession_list$strain.standard.type, sep = "")
+
+  write.csv(accession_list,
+            paste0("./metadata_files/all_accessions_pulled_metadata_", project_name, "_curated.csv"),
+            row.names = FALSE)
+  cat("Wrote curated metadata.\n")
+}
+
+filter_metadata <- function(project_name, taxa_of_interest, acc_to_exclude = NULL) {
+  accession_list <- read.csv(paste0("./metadata_files/all_accessions_pulled_metadata_", project_name, "_curated.csv"),
+                             header = TRUE)
+  accession_list$complex_name <- accession_list$organism
+  accession_list <- accession_list %>%
+    tidyr::separate(complex_name, c("listed.genus", "V1", "V2", "V3"), sep = " ", extra = "merge") %>%
+    dplyr::select(-V1, -V2, -V3)
+
+  accession_list <- accession_list[accession_list$listed.genus %in% taxa_of_interest, ]
+
+  if (!is.null(acc_to_exclude) && length(acc_to_exclude) > 0 && any(acc_to_exclude != "")) {
+    accession_list <- accession_list[!accession_list$Accession %in% acc_to_exclude, ]
+  }
+
+  accession_list[] <- lapply(accession_list, function(x) iconv(x, from = "UTF-8", to = "UTF-8", sub = "byte"))
+
+  write.csv(accession_list,
+            paste0("./metadata_files/all_accessions_pulled_metadata_", project_name, "_curated_filtered.csv"),
+            row.names = FALSE)
+  cat("Wrote curated + filtered metadata.\n")
+}
+
+select_regions <- function(project_name, min_region_requirement = length(regions_to_include)) {
+  accession_list <- read.csv(paste0("./metadata_files/all_accessions_pulled_metadata_", project_name, "_curated_filtered.csv"),
+                             header = TRUE)
+
+  multifasta_prep <- accession_list[accession_list$region.standard %in% regions_to_include, ]
+  write.csv(multifasta_prep, paste0("./metadata_files/selected_accessions_metadata_", project_name, ".csv"),
+            row.names = FALSE)
+
+  multifasta_prep_complete <- subset(multifasta_prep, select = c(strain.standard.type, organism, Accession, region.standard))
+
+  complete_region_attendance <- multifasta_prep_complete %>%
+    tidyr::pivot_wider(names_from = "region.standard", values_from = "Accession", values_fn = list) %>%
+    dplyr::mutate(across(all_of(regions_to_include), ~replace(., lengths(.) == 0, NA)))
+
+  multifasta_prep_select <- dplyr::distinct(multifasta_prep_complete, strain.standard.type, region.standard, .keep_all = TRUE)
+  select_region_attendance <- multifasta_prep_select %>%
+    tidyr::pivot_wider(names_from = "region.standard", values_from = "Accession")
+
+  select_region_attendance_filtered <- select_region_attendance %>%
+    dplyr::mutate(total = rowSums(!is.na(dplyr::select(., -strain.standard.type, -organism)))) %>%
+    dplyr::filter(total >= min_region_requirement) %>%
+    dplyr::select(-total)
+
+  write.csv(select_region_attendance_filtered,
+            paste0("./metadata_files/Region_attendance_sheet_", project_name, ".csv"),
+            row.names = FALSE)
+  cat("Wrote region attendance sheet.\n")
+}
+
+create_multifastas <- function(project_name, output_dir = "./multifastas/") {
+  select_region_attendance_filtered <- read.csv(paste0("./metadata_files/Region_attendance_sheet_", project_name, ".csv"),
+                                                header = TRUE)
+  filtered_accessions <- data.frame(Accession = unlist(select_region_attendance_filtered[, -c(1:2)]),
+                                    row.names = NULL)
+
+  accession_list <- read.csv(paste0("./metadata_files/all_accessions_pulled_metadata_", project_name, "_curated_filtered.csv"),
+                             header = TRUE)
+  filtered_accessions_metadata <- merge(filtered_accessions, accession_list, by = "Accession", all.x = TRUE)
+
+  multifasta_prep_simple <- subset(filtered_accessions_metadata,
+                                   select = c(strain.standard, organism, Accession, region.standard, fasta.header.type, sequence))
+  region_dfs <- split(multifasta_prep_simple, with(multifasta_prep_simple, region.standard), drop = TRUE)
+
+  if (!dir.exists(output_dir)) dir.create(output_dir, recursive = TRUE)
+
+  for (i in seq_along(region_dfs)) {
+    locus_df <- region_dfs[[i]]
+    locus_df <- locus_df[order(locus_df$fasta.header.type, decreasing = FALSE), ]
+    region.name <- unique(locus_df$region.standard)
+    seqs_fasta <- c(rbind(locus_df$fasta.header.type, locus_df$sequence))
+    filename <- paste0(output_dir, region.name, ".fasta")
+    write.table(seqs_fasta, filename, row.names = FALSE, quote = FALSE, col.names = FALSE)
+    message("Created multifasta for region: ", region.name)
+  }
+  cat("Multifasta files created in ", output_dir, "\n")
+}
+
+
+# Create Projects/<project_name>/ and run your normal structure inside it.
+start_project <- function(projects_dir = file.path(path.expand("~"), "aRborist_Projects"),
+                          project_name) {
+  if (!dir.exists(projects_dir)) dir.create(projects_dir, recursive = TRUE)
+
+  assign("project_name", project_name, envir = .GlobalEnv)
+  assign("base_dir", file.path(projects_dir, project_name), envir = .GlobalEnv)
+  if (!dir.exists(base_dir)) dir.create(base_dir, recursive = TRUE)
+  setup_project_structure(base_dir)
+  invisible(normalizePath(base_dir))
+}
+
+# Save the run options for this project so it's reproducible later
+save_project_config <- function(project_dir = getwd(),
+                                project_name,
+                                taxa_of_interest,
+                                regions_to_include,
+                                max_acc_per_taxa,
+                                min_region_requirement,
+                                my_lab_sequences,
+                                ncbi_api_key_present = !is.null(ncbi_api_key) && nzchar(ncbi_api_key)) {
+  cfg <- list(
+    project_name = project_name,
+    saved_at = as.character(Sys.time()),
+    options = list(
+      taxa_of_interest = taxa_of_interest,
+      regions_to_include = regions_to_include,
+      max_acc_per_taxa = max_acc_per_taxa,
+      min_region_requirement = min_region_requirement,
+      my_lab_sequences = my_lab_sequences,
+      ncbi_api_key_present = ncbi_api_key_present
+    ),
+    versions = list(
+      R = R.version$version.string,
+      packages = as.list(installed.packages()[c("Package","Version")]) # compact
+    )
+  )
+  yaml::write_yaml(cfg, file.path(project_dir, "config.yml"))
+  message("Saved project config: ", file.path(project_dir, "config.yml"))
+}
+
+# Load a project's config and return a named list (does not auto-assign)
+load_project_config <- function(projects_dir, project_name) {
+  cfg_path <- file.path(projects_dir, project_name, "config.yml")
+  if (!file.exists(cfg_path)) stop("No config.yml found for project: ", cfg_path)
+  yaml::read_yaml(cfg_path)
+}
+
+
+# Simple wrappers (used by the runner)
+ncbi_data_fetch <- function(project_name, max_acc_per_taxa = "max", taxa_of_interest = NULL) {
+  get_accessions_for_all_taxa(taxa_of_interest, max_acc_per_taxa)
+  retrieve_ncbi_metadata(project_name)
+}
+
+data_curate <- function(project_name, taxa_of_interest = NULL, acc_to_exclude = NULL,
+                        min_region_requirement = length(regions_to_include)) {
+  merge_metadata_with_custom_file(project_name)
+  curate_metadata(project_name)
+  filter_metadata(project_name, taxa_of_interest, acc_to_exclude)
+  select_regions(project_name, min_region_requirement)
+  create_multifastas(project_name)
+}
+
+
