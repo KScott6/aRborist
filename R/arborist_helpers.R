@@ -553,38 +553,30 @@ save_project_config <- function(project_dir = getwd(),
                                 project_name,
                                 taxa_of_interest,
                                 regions_to_include = NULL,
-                                max_acc_per_taxa = "max",
+                                max_acc_per_taxa = NULL,           # <— no default
                                 min_region_requirement = NULL,
                                 my_lab_sequences = "",
                                 acc_to_exclude = NULL,
-                                organism_scope = if (exists("organism_scope")) get("organism_scope", envir = .GlobalEnv) else NULL,
-                                search_options = if (exists("search_options")) get("search_options", envir = .GlobalEnv) else NULL,
+                                organism_scope = if (exists("organism_scope", .GlobalEnv)) get("organism_scope", .GlobalEnv) else NULL,
+                                search_options = if (exists("search_options", .GlobalEnv)) get("search_options", .GlobalEnv) else NULL,
                                 ncbi_api_key_present = {
-                                  # prefer explicit ncbi_api_key if defined, else record env var
-                                  if (exists("ncbi_api_key", envir = .GlobalEnv)) {
-                                    nzchar(get("ncbi_api_key", envir = .GlobalEnv))
-                                  } else {
-                                    nzchar(Sys.getenv("NCBI_API_KEY"))
-                                  }
+                                  if (exists("ncbi_api_key", .GlobalEnv)) nzchar(get("ncbi_api_key", .GlobalEnv))
+                                  else nzchar(Sys.getenv("NCBI_API_KEY"))
                                 }) {
 
   cfg <- list(
     project_name = project_name,
     saved_at     = as.character(Sys.time()),
-
     options = list(
       taxa_of_interest       = taxa_of_interest,
+      regions_to_include     = regions_to_include,
       max_acc_per_taxa       = max_acc_per_taxa,
+      min_region_requirement = min_region_requirement,
       my_lab_sequences       = my_lab_sequences,
       acc_to_exclude         = acc_to_exclude,
       organism_scope         = organism_scope,
       search_options         = search_options,
       ncbi_api_key_present   = ncbi_api_key_present
-    ),
-
-    versions = list(
-      R        = R.version$version.string,
-      packages = as.list(installed.packages()[, c("Package","Version")])
     )
   )
 
@@ -593,6 +585,7 @@ save_project_config <- function(project_dir = getwd(),
   message("Saved project config: ", file.path(project_dir, "config.yml"))
   invisible(cfg)
 }
+
 
 
 # Load a project's config and return a named list (does not auto-assign)

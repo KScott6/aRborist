@@ -98,19 +98,21 @@ taxa_of_interest   <- c("Blackwellomyces", "Flavocillium") # provide list of tax
 organism_scope <- "txid4751[Organism:exp]" # Set organism constraint. Provide NCBI taxonomy ID or common name. Fungi (txid4751) is the default option. Leave blank ("") to disregard organism constraint entirely (not recommended).
 search_options <- "(biomol_genomic[PROP] AND (100[SLEN]:5000[SLEN])) NOT Contig[All Fields] NOT scaffold[All Fields] NOT genome[All Fields]" # default shown. Use NCBI advanced search terms. 
 max_acc_per_taxa   <- 1000 # put "max" if you want all the matching hits per search/region search, otherwise indicate an integer.
-ncbi_api_key <- Sys.getenv("NCBI_API_KEY")  # recommended
+ncbi_api_key <- Sys.getenv("NCBI_API_KEY")  # recommended to provide an API key. Provide your key here in quotes, if you didn't set it up in your environment previously.
 my_lab_sequences   <- ""  # Optional. Leave blank or provide a path to a CSV with lab sequence info
 
 # Save the exact options you used in your project folder (for reproducibility)
 save_project_config(
-  project_dir        = getwd(),
-  project_name       = project_name,
-  taxa_of_interest   = taxa_of_interest,
-  my_lab_sequences   = my_lab_sequences,
-  organism_scope     = organism_scope,
-  search_options     = search_options,
-  max_acc_per_taxa   = max_acc_per_taxa,
-  acc_to_exclude     = acc_to_exclude
+  project_dir            = getwd(),
+  project_name           = project_name,
+  taxa_of_interest       = taxa_of_interest,
+  regions_to_include     = NULL,                 
+  min_region_requirement = NULL,                 
+  my_lab_sequences       = my_lab_sequences,
+  acc_to_exclude         = acc_to_exclude,
+  organism_scope         = organism_scope,
+  search_options         = search_options,
+  max_acc_per_taxa       = max_acc_per_taxa    
 )
 
 ```
