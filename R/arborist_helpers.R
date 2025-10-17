@@ -7,8 +7,8 @@ required_packages <- c(
   "rentrez","stringr","plyr","dplyr","withr","XML",
   "data.table","tidyr","phylotools","scales",
   "purrr","readr","phytools","RColorBrewer",
-  "maps","ggplot2","tidygeocoder","treeio",
-  "ggtree","ggrepel","taxize","Biostrings", "yaml"
+  "maps","ggplot2","tidygeocoder",
+  "ggrepel","taxize","Biostrings", "yaml"
 )
 
 installed_packages <- required_packages %in% rownames(installed.packages())
@@ -32,11 +32,10 @@ if (!exists("metadata_categories_keep")) {
 }
 
 # Project structure
-setup_project_structure <- function(base_dir = base_dir,
+setup_project_structure <- function(project_dir,
                                     subdirs = c("intermediate_files", "metadata_files", "results_files",
                                                 "temp_files", "multifastas", "multifastas/aligned_fastas",
                                                 "multigene_tree", "multigene_tree/prep", "single_gene_trees")) {
-  project_dir <- file.path(base_dir, project_name)
   if (!dir.exists(project_dir)) dir.create(project_dir)
   for (dir in subdirs) {
     full_path <- file.path(project_dir, dir)
@@ -45,9 +44,12 @@ setup_project_structure <- function(base_dir = base_dir,
   setwd(project_dir)
 }
 
+
 # Sleep helper (uses ncbi_api_key from global env)
+# this is not using the "10 requests/sec with API, 3 requests/sec without" timing because I noticed the requests were being bunched up and sent in groups, resulting in a noticable percentage of my requests getting denied. 
+# you can mess with the timings if you want, but watch out for denied requests
 get_sleep_duration <- function() {
-  if (!is.null(ncbi_api_key) && nzchar(ncbi_api_key)) 0.3 else 0.5
+  if (!is.null(ncbi_api_key) && nzchar(ncbi_api_key)) 0.2 else 0.5
 }
 if (exists("ncbi_api_key") && !is.null(ncbi_api_key) && nzchar(ncbi_api_key)) {
   rentrez::set_entrez_key(ncbi_api_key)
@@ -66,7 +68,7 @@ fetch_accessions_for_taxon <- function(taxon, max_acc = max_acc_per_taxa) {
                     genus = taxon,
                     stringsAsFactors = FALSE))
                     }
-                    
+
   if ((length(search$ids)) == 9999) {
     cat(taxon, "has >10,000 NCBI accessions. Using webhistory.\n")
     large_search <- rentrez::entrez_search(db = "nucleotide", term = filters, use_history = TRUE)
@@ -115,26 +117,61 @@ fetch_accessions_for_taxon <- function(taxon, max_acc = max_acc_per_taxa) {
 
 get_accessions_for_all_taxa <- function(taxa_list, max_acc_per_taxa) {
   taxa_frame_acc <- list()
+  timing_log <- data.frame(Taxon = character(),
+                           Num_accessions = integer(),
+                           Start_time = character(),
+                           End_time = character(),
+                           Elapsed_minutes = numeric(),
+                           stringsAsFactors = FALSE)
+
+  overall_start <- Sys.time()
 
   for (i in seq_along(taxa_list)) {
-    tryCatch({
-      term <- taxa_list[i]
-      tempdf <- fetch_accessions_for_taxon(term, max_acc = max_acc_per_taxa)
+    term <- taxa_list[i]
+    cat("\n=== Starting", term, "(", i, "of", length(taxa_list), ") ===\n")
+    start_time <- Sys.time()
 
-      outfile_name <- paste0("./intermediate_files/Accessions_for_", term, ".csv")
-      write.csv(tempdf, outfile_name, row.names = FALSE, quote = FALSE)
-      taxa_frame_acc[[i]] <- tempdf
-
+    tempdf <- tryCatch({
+      fetch_accessions_for_taxon(term, max_acc = max_acc_per_taxa)
     }, error = function(e) {
-      Sys.sleep(get_sleep_duration())
       cat("ERROR:", conditionMessage(e), "\n")
+      data.frame(Accession = character(0), genus = term, stringsAsFactors = FALSE)
     })
+
+    end_time <- Sys.time()
+    elapsed <- as.numeric(difftime(end_time, start_time, units = "mins"))
+    cat(sprintf("Finished %s in %.2f minutes\n", term, elapsed))
+
+    # record timing
+    timing_log <- rbind(timing_log, data.frame(
+      Taxon = term,
+      Num_accessions = nrow(tempdf),
+      Start_time = format(start_time, "%Y-%m-%d %H:%M:%S"),
+      End_time = format(end_time, "%Y-%m-%d %H:%M:%S"),
+      Elapsed_minutes = round(elapsed, 2),
+      stringsAsFactors = FALSE
+    ))
+
+    # save per-taxon accessions
+    outfile_name <- paste0("./intermediate_files/Accessions_for_", term, ".csv")
+    write.csv(tempdf, outfile_name, row.names = FALSE, quote = FALSE)
+    taxa_frame_acc[[i]] <- tempdf
   }
 
+  total_elapsed <- as.numeric(difftime(Sys.time(), overall_start, units = "mins"))
+  cat("\nAll taxa completed in", round(total_elapsed, 2), "minutes.\n")
+
+  # save the full accession list
   accession_list <- do.call(rbind, taxa_frame_acc)
   write.csv(accession_list, "./intermediate_files/all_pulled_accessions.csv", row.names = FALSE)
-  cat("All accessions retrieved and saved.\n")
+
+  # save timing log
+  write.csv(timing_log, "./intermediate_files/fetch_times.csv", row.names = FALSE)
+  cat("Timing log written to ./intermediate_files/fetch_times.csv\n")
+
+  return(accession_list)
 }
+
 
 
 # Metadata retrieval
@@ -168,34 +205,107 @@ fetch_metadata_for_accession <- function(accession) {
 
 retrieve_ncbi_metadata <- function(project_name) {
   accession_list <- read.csv("./intermediate_files/all_pulled_accessions.csv", header = TRUE)
-  metadata_database_list <- list()
 
-  for (i in 1:nrow(accession_list)) {
-    tryCatch({
-      accession <- accession_list$Accession[i]
-      cat("Processing Accession:", accession, "\n")
-
-      metadata_entry <- fetch_metadata_for_accession(accession)
-      metadata_database_list[[i]] <- metadata_entry
-
-      cat("#", i, "Accession:", metadata_entry$Accession,
-          "| Species:", metadata_entry$organism,
-          "| Isolation:", metadata_entry$isolation_source,
-          "| Host:", metadata_entry$host, "\n")
-
-      Sys.sleep(get_sleep_duration())
-
-    }, error = function(e) {
-      Sys.sleep(get_sleep_duration())
-      cat("ERROR:", conditionMessage(e), "\n")
-    })
+  # Split by taxon if available; otherwise treat as a single group ("ALL")
+  if ("genus" %in% names(accession_list)) {
+    taxa_groups <- split(accession_list, accession_list$genus)
+  } else {
+    taxa_groups <- list(ALL = accession_list)
   }
 
-  metadata_database <- plyr::rbind.fill(metadata_database_list)
-  write.csv(metadata_database, paste0("./metadata_files/all_accessions_pulled_metadata_", project_name, ".csv"),
-            row.names = FALSE)
-  cat("Metadata saved for project:", project_name, "\n")
+  metadata_database_list <- vector("list", length = nrow(accession_list))
+  fill_idx <- 1L
+
+  timing_log <- data.frame(
+    Taxon = character(),
+    Num_accessions = integer(),
+    Start_time = character(),
+    End_time = character(),
+    Elapsed_minutes = numeric(),
+    stringsAsFactors = FALSE
+  )
+
+  overall_start <- Sys.time()
+  cat("\nStarting metadata retrieval for", nrow(accession_list), "accessions across",
+      length(taxa_groups), "taxon group(s)...\n")
+
+  # Loop over taxa (genus) blocks; time each block
+  for (tx in names(taxa_groups)) {
+    block <- taxa_groups[[tx]]
+    taxon_start <- Sys.time()
+    cat(sprintf("\n--- %s: %d accession(s) ---\n", tx, nrow(block)))
+
+    # Process each accession in this taxon
+for (i in seq_len(nrow(block))) {
+  acc <- block$Accession[i]
+  cat(sprintf("[%d/%d] %s ... ", i, nrow(block), acc))
+  tryCatch({
+    entry <- fetch_metadata_for_accession(acc)
+    metadata_database_list[[fill_idx]] <- entry
+    fill_idx <- fill_idx + 1L
+
+    # metadata summary printout
+    cat("#", i,
+        "| Accession:", entry$Accession,
+        "| Species:", entry$organism,
+        "| Strain:", dplyr::coalesce(entry$strain, entry$specimen_voucher, entry$isolate, ""),
+        "| Isolation source:", entry$isolation_source,
+        "| Host:", entry$host, "\n")
+
+    cat("done\n")
+
+  }, error = function(e) {
+    cat("ERROR:", conditionMessage(e), "\n")
+  })
+  Sys.sleep(get_sleep_duration())
 }
+
+
+    taxon_end <- Sys.time()
+    taxon_elapsed <- as.numeric(difftime(taxon_end, taxon_start, units = "mins"))
+    timing_log <- rbind(
+      timing_log,
+      data.frame(
+        Taxon = tx,
+        Num_accessions = nrow(block),
+        Start_time = format(taxon_start, "%Y-%m-%d %H:%M:%S"),
+        End_time = format(taxon_end, "%Y-%m-%d %H:%M:%S"),
+        Elapsed_minutes = round(taxon_elapsed, 2),
+        stringsAsFactors = FALSE
+      )
+    )
+    cat(sprintf("%s completed in %.2f minutes\n", tx, taxon_elapsed))
+  }
+
+  overall_end <- Sys.time()
+  total_elapsed <- as.numeric(difftime(overall_end, overall_start, units = "mins"))
+  cat("\nAll metadata retrieved in", round(total_elapsed, 2), "minutes total.\n")
+
+  # Bind all non-NULL entries
+  metadata_database <- plyr::rbind.fill(Filter(Negate(is.null), metadata_database_list))
+  write.csv(
+    metadata_database,
+    paste0("./metadata_files/all_accessions_pulled_metadata_", project_name, ".csv"),
+    row.names = FALSE
+  )
+  cat("Metadata saved for project:", project_name, "\n")
+
+  # Add a TOTAL row and write timing CSV
+  timing_log <- rbind(
+    timing_log,
+    data.frame(
+      Taxon = "TOTAL",
+      Num_accessions = nrow(accession_list),
+      Start_time = format(overall_start, "%Y-%m-%d %H:%M:%S"),
+      End_time = format(overall_end, "%Y-%m-%d %H:%M:%S"),
+      Elapsed_minutes = round(total_elapsed, 2),
+      stringsAsFactors = FALSE
+    )
+  )
+  write.csv(timing_log, "./intermediate_files/fetch_times_metadata_by_taxon.csv", row.names = FALSE)
+  cat("Timing log written to ./intermediate_files/fetch_times_metadata_by_taxon.csv\n")
+}
+
 
 
 # Custom sequences merge
@@ -212,7 +322,7 @@ merge_metadata_with_custom_file <- function(project_name) {
   custom_sequences <- read.csv(my_lab_sequences, header = TRUE, fill = TRUE)
 
   if (!all(c("Accession","strain","sequence","organism","gene") %in% colnames(custom_sequences))) {
-    stop("Custom file must contain at least 'Accession', 'strain', 'sequence', 'organism', and 'gene' columns.")
+    stop("Custom file must contain at least 'Accession', 'strain', 'sequence', 'organism', and 'gene' columns. If your sequences do not have accessions, you can simply use their strain name or other unique identifier.")
   }
 
   merged_data <- plyr::rbind.fill(metadata_database, custom_sequences)
