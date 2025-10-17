@@ -29,22 +29,16 @@ if (!exists("search_options")) {
   search_options <- "(biomol_genomic[PROP] AND (100[SLEN]:5000[SLEN])) NOT Contig[All Fields] NOT scaffold[All Fields] NOT genome[All Fields]" # this is my preferred default
 }
 
-compose_entrez_term <- function(taxon,
-                                organism_scope = organism_scope,
-                                extra_filters = search_options) {
+compose_entrez_term <- function(taxon, organism_scope = NULL, extra_filters = NULL) {
+  if (is.null(organism_scope) && exists("organism_scope", .GlobalEnv))
+    organism_scope <- get("organism_scope", envir = .GlobalEnv)
+  if (is.null(extra_filters) && exists("search_options", .GlobalEnv))
+    extra_filters <- get("search_options", envir = .GlobalEnv)
+
   parts <- c(sprintf('("%s"[All Fields])', taxon), organism_scope, extra_filters)
-  paste(Filter(nzchar, parts), collapse = " AND ")
+  paste(Filter(function(z) !is.null(z) && nzchar(z), parts), collapse = " AND ")
 }
 
-# defaults for metadata "keep" category
-if (!exists("metadata_categories_keep")) {
-  metadata_categories_keep <- c(
-    "GBSeq_locus","GBSeq_length","GBSeq_strandedness","GBSeq_moltype",
-    "GBSeq_update.date","GBSeq_create.date","GBSeq_definition",
-    "GBSeq_accession.version","GBSeq_project","GBSeq_organism","GBSeq_taxonomy",
-    "GBSeq_sequence","GBSeq_feature.table","_title","_journal","ref_id","pubmed"
-  )
-}
 
 # Project structure
 setup_project_structure <- function(project_dir,
@@ -73,82 +67,100 @@ if (exists("ncbi_api_key") && !is.null(ncbi_api_key) && nzchar(ncbi_api_key)) {
 # Fetch accessions from NCBI
 fetch_accessions_for_taxon <- function(taxon,
                                        max_acc = max_acc_per_taxa,
-                                       organism_scope = organism_scope,
-                                       extra_filters = search_options) {
-  filters <- compose_entrez_term(taxon, organism_scope, extra_filters)
+                                       organism_scope = NULL,
+                                       extra_filters  = NULL) {
   cat("Searching term:", taxon, "\n")
 
-  # allows up to 9,999 ids without webhistory
+  # resolving defaults from globals, if needed
+  if (is.null(organism_scope) && exists("organism_scope", .GlobalEnv))
+    organism_scope <- get("organism_scope", envir = .GlobalEnv)
+  if (is.null(extra_filters) && exists("search_options", .GlobalEnv))
+    extra_filters <- get("search_options", envir = .GlobalEnv)
+
+  filters <- compose_entrez_term(taxon, organism_scope, extra_filters)
+
   search <- rentrez::entrez_search(db = "nucleotide", term = filters, retmax = 9999)
-  
+
+  # No results returns a zero-row df
   if (length(search$ids) == 0) {
-  cat("No accessions found for:", taxon, "\n")
-  return(data.frame(Accession = character(0),
-                    genus = taxon,
-                    stringsAsFactors = FALSE))
-                    }
+    cat("No accessions found for:", taxon, "\n")
+    return(data.frame(Accession = character(0), genus = character(0), stringsAsFactors = FALSE))
+  }
 
-  if ((length(search$ids)) == 9999) {
-    cat(taxon, "has >10,000 NCBI accessions. Using webhistory.\n")
+  max_n <- if (identical(max_acc, "max")) Inf else as.numeric(max_acc)
+
+  if (length(search$ids) == 9999) {
+    cat(taxon, "has ≥ 10,000 NCBI accessions. Using webhistory.\n")
     large_search <- rentrez::entrez_search(db = "nucleotide", term = filters, use_history = TRUE)
-    temp_filename <- paste0("./temp_files/temp_file_accessions_from_", taxon, ".txt")
-
     total_accession_count <- as.integer(large_search[["count"]])
-    max_acc <- ifelse(identical(max_acc, "max"), total_accession_count, as.numeric(max_acc))
-    cat(total_accession_count, "accessions available for", taxon, "- pulling a maximum of", max_acc, "\n")
+    pull_n <- min(total_accession_count, max_n)
+    cat(total_accession_count, "accessions available for", taxon, "- pulling a maximum of", pull_n, "\n")
 
-    for (seq_start in seq(0, max_acc - 1, by = 50)) {
+    temp_filename <- paste0("./temp_files/temp_file_accessions_from_", taxon, ".txt")
+    if (file.exists(temp_filename)) file.remove(temp_filename)
+
+    for (seq_start in seq(0, pull_n - 1, by = 50)) {
       recs <- rentrez::entrez_fetch(db = "nuccore",
                                     web_history = large_search$web_history,
-                                    rettype = "acc", retmax = 50, retstart = seq_start)
+                                    rettype = "acc",
+                                    retmax = min(50, pull_n - seq_start),
+                                    retstart = seq_start)
       cat(recs, file = temp_filename, append = TRUE)
       Sys.sleep(get_sleep_duration())
-      cat(seq_start + 49, "accessions recorded\r")
+      cat(seq_start + min(49, pull_n - seq_start - 1), "accessions recorded\r")
     }
 
-    large_temp_df <- read.table(temp_filename)
+    large_temp_df <- read.table(temp_filename, stringsAsFactors = FALSE)
     colnames(large_temp_df) <- c("Accession")
     large_temp_df$genus <- taxon
     if (file.exists(temp_filename)) file.remove(temp_filename)
     cat("Accession retrieval for", taxon, "successful\n\n")
     return(large_temp_df)
-
-  } else {
-    if (length(search$ids) <= 300) {
-      summary <- rentrez::entrez_summary(db = "nuccore", id = search$ids)
-      Sys.sleep(get_sleep_duration())
-    } else {
-      summary <- list()
-      index <- split(seq_along(search$ids), ceiling(seq_along(search$ids) / 300))
-      for (p in index) {
-        summary[p] <- rentrez::entrez_summary(db = "nuccore", id = search$ids[p])
-        Sys.sleep(get_sleep_duration())
-      }
-      class(summary) <- c("esummary_list", "list")
-    }
-
-    tempdf <- data.frame(Accession = unname(rentrez::extract_from_esummary(summary, "caption")), stringsAsFactors = FALSE)
-    tempdf$genus <- taxon
-    cat("Search complete for", taxon, "\n")
-    return(tempdf)
   }
+
+  # Normal path (≤ 9,999)
+  ids <- search$ids
+  if (is.finite(max_n)) ids <- utils::head(ids, max_n)
+
+  if (length(ids) <= 300) {
+    summary <- rentrez::entrez_summary(db = "nuccore", id = ids)
+    Sys.sleep(get_sleep_duration())
+  } else {
+    summary <- list()
+    index <- split(seq_along(ids), ceiling(seq_along(ids) / 300))
+    for (p in index) {
+      summary[p] <- rentrez::entrez_summary(db = "nuccore", id = ids[p])
+      Sys.sleep(get_sleep_duration())
+    }
+    class(summary) <- c("esummary_list", "list")
+  }
+
+  tempdf <- data.frame(Accession = unname(rentrez::extract_from_esummary(summary, "caption")),
+                       stringsAsFactors = FALSE)
+  tempdf$genus <- taxon
+  cat("Search complete for", taxon, " (", nrow(tempdf), " accessions)\n", sep = "")
+  return(tempdf)
 }
 
 get_accessions_for_all_taxa <- function(taxa_list,
                                         max_acc_per_taxa,
-                                        organism_scope = organism_scope,
-                                        extra_filters = search_options,
+                                        organism_scope = NULL,
+                                        extra_filters  = NULL,
                                         timing_file = "./intermediate_files/fetch_times_accessions.csv") {
+  # Resolve defaults if not provided
+  if (is.null(organism_scope) && exists("organism_scope", .GlobalEnv))
+    organism_scope <- get("organism_scope", envir = .GlobalEnv)
+  if (is.null(extra_filters) && exists("search_options", .GlobalEnv))
+    extra_filters <- get("search_options", envir = .GlobalEnv)
+
   taxa_frame_acc <- vector("list", length(taxa_list))
 
-  timing_log <- data.frame(
-    Taxon = character(),
-    Num_accessions = integer(),
-    Start_time = character(),
-    End_time = character(),
-    Elapsed_minutes = numeric(),
-    stringsAsFactors = FALSE
-  )
+  timing_log <- data.frame(Taxon = character(),
+                           Num_accessions = integer(),
+                           Start_time = character(),
+                           End_time = character(),
+                           Elapsed_minutes = numeric(),
+                           stringsAsFactors = FALSE)
 
   overall_start <- Sys.time()
 
@@ -166,30 +178,24 @@ get_accessions_for_all_taxa <- function(taxa_list,
       )
     }, error = function(e) {
       cat("ERROR:", conditionMessage(e), "\n")
-      data.frame(Accession = character(0), genus = term, stringsAsFactors = FALSE)
+      data.frame(Accession = character(0), genus = character(0), stringsAsFactors = FALSE)
     })
 
     end_time <- Sys.time()
     elapsed <- as.numeric(difftime(end_time, start_time, units = "mins"))
     cat(sprintf("Finished %s in %.2f minutes\n", term, elapsed))
 
-    # record timing
-    timing_log <- rbind(
-      timing_log,
-      data.frame(
-        Taxon = term,
-        Num_accessions = nrow(tempdf),
-        Start_time = format(start_time, "%Y-%m-%d %H:%M:%S"),
-        End_time = format(end_time, "%Y-%m-%d %H:%M:%S"),
-        Elapsed_minutes = round(elapsed, 2),
-        stringsAsFactors = FALSE
-      )
-    )
-
+    timing_log <- rbind(timing_log, data.frame(
+      Taxon = term,
+      Num_accessions = nrow(tempdf),
+      Start_time = format(start_time, "%Y-%m-%d %H:%M:%S"),
+      End_time = format(end_time, "%Y-%m-%d %H:%M:%S"),
+      Elapsed_minutes = round(elapsed, 2),
+      stringsAsFactors = FALSE
+    ))
     # save per-taxon accessions (even if empty, so users see it was checked)
     outfile_name <- paste0("./intermediate_files/Accessions_for_", term, ".csv")
     write.csv(tempdf, outfile_name, row.names = FALSE, quote = FALSE)
-
     taxa_frame_acc[[i]] <- tempdf
   }
 
@@ -203,16 +209,14 @@ get_accessions_for_all_taxa <- function(taxa_list,
   } else {
     data.frame(Accession = character(0), genus = character(0), stringsAsFactors = FALSE)
   }
-
-  # save master list
+# write log with fetch times
   write.csv(accession_list, "./intermediate_files/all_pulled_accessions.csv", row.names = FALSE)
-
-  # save timing log (renamed per your preference)
   write.csv(timing_log, timing_file, row.names = FALSE)
   cat("Timing log written to ", timing_file, "\n", sep = "")
 
   return(accession_list)
 }
+
 
 
 # Metadata retrieval
@@ -548,30 +552,48 @@ start_project <- function(projects_dir = file.path(path.expand("~"), "aRborist_P
 save_project_config <- function(project_dir = getwd(),
                                 project_name,
                                 taxa_of_interest,
-                                regions_to_include,
-                                max_acc_per_taxa,
-                                min_region_requirement,
-                                my_lab_sequences,
-                                ncbi_api_key_present = !is.null(ncbi_api_key) && nzchar(ncbi_api_key)) {
+                                regions_to_include = NULL,
+                                max_acc_per_taxa = "max",
+                                min_region_requirement = NULL,
+                                my_lab_sequences = "",
+                                acc_to_exclude = NULL,
+                                organism_scope = if (exists("organism_scope")) get("organism_scope", envir = .GlobalEnv) else NULL,
+                                search_options = if (exists("search_options")) get("search_options", envir = .GlobalEnv) else NULL,
+                                ncbi_api_key_present = {
+                                  # prefer explicit ncbi_api_key if defined, else record env var
+                                  if (exists("ncbi_api_key", envir = .GlobalEnv)) {
+                                    nzchar(get("ncbi_api_key", envir = .GlobalEnv))
+                                  } else {
+                                    nzchar(Sys.getenv("NCBI_API_KEY"))
+                                  }
+                                }) {
+
   cfg <- list(
     project_name = project_name,
-    saved_at = as.character(Sys.time()),
+    saved_at     = as.character(Sys.time()),
+
     options = list(
-      taxa_of_interest = taxa_of_interest,
-      regions_to_include = regions_to_include,
-      max_acc_per_taxa = max_acc_per_taxa,
-      min_region_requirement = min_region_requirement,
-      my_lab_sequences = my_lab_sequences,
-      ncbi_api_key_present = ncbi_api_key_present
+      taxa_of_interest       = taxa_of_interest,
+      max_acc_per_taxa       = max_acc_per_taxa,
+      my_lab_sequences       = my_lab_sequences,
+      acc_to_exclude         = acc_to_exclude,
+      organism_scope         = organism_scope,
+      search_options         = search_options,
+      ncbi_api_key_present   = ncbi_api_key_present
     ),
+
     versions = list(
-      R = R.version$version.string,
-      packages = as.list(installed.packages()[c("Package","Version")]) # compact
+      R        = R.version$version.string,
+      packages = as.list(installed.packages()[, c("Package","Version")])
     )
   )
+
+  if (!dir.exists(project_dir)) dir.create(project_dir, recursive = TRUE)
   yaml::write_yaml(cfg, file.path(project_dir, "config.yml"))
   message("Saved project config: ", file.path(project_dir, "config.yml"))
+  invisible(cfg)
 }
+
 
 # Load a project's config and return a named list (does not auto-assign)
 load_project_config <- function(projects_dir, project_name) {

@@ -81,10 +81,15 @@ start_project(projects_dir, project_name) # this will create a project folder in
 Exaplaination of options:
 
 `taxa_of_interest` Provide a list of genus or species names to search on NCBI. 
+
 `organism_scope` Change to your organisms' correct kingdom. You can use NCBI taxonomy codes or simple names ("txid2[Organism:exp]" = "Bacteria[Organism:exp]"; "txid33090[Organism:exp]" = "Viridiplantae"). Fungi (txid4751) is the default option. Using this option helps reduce the number of incorrect hits during your search, but you could also leave this option blank ("") to not have any organism contraints in your search. 
+
 `search_options` Change to fit your search needs. Use the terms for the [NCBI advanced search](https://www.ncbi.nlm.nih.gov/nuccore/advanced). 
+
 `max_acc_per_taxa` Maximum number of accessions to obtain for each taxa/region search. Use the option "max" to retrieve **all** the matching NCBI hits -- but be warned that for taxa with many accessions (Fusarium, Alternaria, etc.) this can make the metadata retreival step take **a really long time**. 
+
 `ncbi_api_key` Your NCBI API key. If you didn't set up your R environment with your API key, you can do it here.
+
 `my_lab_sequences` If you want to include your own lab sequences, provide a 5-column csv with Accession, strain, sequence, organism, and gene columns (see [example_lab_seq_input.csv](example_data/example_lab_seq_input.csv) for an example).
 
 ```R
@@ -98,14 +103,16 @@ my_lab_sequences   <- ""  # Optional. Leave blank or provide a path to a CSV wit
 
 # Save the exact options you used in your project folder (for reproducibility)
 save_project_config(
-  project_dir = getwd(),
-  project_name = project_name,
-  taxa_of_interest = taxa_of_interest,
-  max_acc_per_taxa = max_acc_per_taxa,
-  my_lab_sequences = my_lab_sequences,
-  organism_scope = organism_scope,
-  search_options = search_options
+  project_dir        = getwd(),
+  project_name       = project_name,
+  taxa_of_interest   = taxa_of_interest,
+  my_lab_sequences   = my_lab_sequences,
+  organism_scope     = organism_scope,
+  search_options     = search_options,
+  max_acc_per_taxa   = max_acc_per_taxa,
+  acc_to_exclude     = acc_to_exclude
 )
+
 ```
 
 ### 4) Run aRborist to collect metadata
@@ -121,6 +128,7 @@ ncbi_data_fetch(project_name, max_acc_per_taxa, taxa_of_interest)
 ### set options for filtering
 
 `regions_to_include` Provide a list of loci of interest. Try to use the spelling/abbreviations commonly used on NCBI (e.g. if you search "TEF1" you'll get many more hits than if you searched "ef-1").
+
 `min_region_requirement` The number of user-specified loci an isolate must have in order to progress to be included in final downstream analyses. 
 
 ```R
