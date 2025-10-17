@@ -245,7 +245,8 @@ fetch_metadata_for_accession <- function(accession) {
     return(data.frame(Accession = accession, stringsAsFactors = FALSE))
   }
   accession_dfs <- lapply(list.out, data.frame, stringsAsFactors = FALSE)
-  all_metadata_df <- accession_dfs[[1]]
+  all_metadata_df <- accession_dfs[[1]]as.data.frame(metadata_entry, stringsAsFactors = FALSE)
+  }
 
   keep_cols <- intersect(metadata_categories_keep, names(all_metadata_df))
   select_metadata_df <- all_metadata_df[, keep_cols, drop = FALSE]
