@@ -39,6 +39,15 @@ compose_entrez_term <- function(taxon, organism_scope = NULL, extra_filters = NU
   paste(Filter(function(z) !is.null(z) && nzchar(z), parts), collapse = " AND ")
 }
 
+# default metadata categories to keep in search
+if (!exists("metadata_categories_keep", .GlobalEnv)) {
+  metadata_categories_keep <- c(
+    "GBSeq_locus","GBSeq_length","GBSeq_strandedness","GBSeq_moltype",
+    "GBSeq_update.date","GBSeq_create.date","GBSeq_definition",
+    "GBSeq_accession.version","GBSeq_project","GBSeq_organism","GBSeq_taxonomy",
+    "GBSeq_sequence","GBSeq_feature.table","_title","_journal","ref_id","pubmed"
+  )
+}
 
 # Project structure
 setup_project_structure <- function(project_dir,
@@ -221,37 +230,84 @@ get_accessions_for_all_taxa <- function(taxa_list,
 
 # Metadata retrieval
 fetch_metadata_for_accession <- function(accession) {
+  # default keep list if user didn't define one
+  if (!exists("metadata_categories_keep", .GlobalEnv)) {
+    metadata_categories_keep <- c(
+      "GBSeq_locus","GBSeq_length","GBSeq_strandedness","GBSeq_moltype",
+      "GBSeq_update.date","GBSeq_create.date","GBSeq_definition",
+      "GBSeq_accession.version","GBSeq_project","GBSeq_organism","GBSeq_taxonomy",
+      "GBSeq_sequence","GBSeq_feature.table","_title","_journal","ref_id","pubmed"
+    )
+  }
+
+  # fetch XML and coerce to data.frame 
   out.xml <- rentrez::entrez_fetch(db = "nuccore", id = accession, rettype = "xml")
   list.out <- XML::xmlToList(out.xml)
+
+  if (length(list.out) == 0L) {
+    return(data.frame(Accession = accession, stringsAsFactors = FALSE))
+  }
+
   accession_dfs <- lapply(list.out, data.frame, stringsAsFactors = FALSE)
   all_metadata_df <- accession_dfs[[1]]
 
-  # keep only selected categories
-  select_metadata_df <- all_metadata_df[, grep(paste(metadata_categories_keep, collapse = "|"),
-                                               x = names(all_metadata_df))]
+  # keep only columns that actually exist in this record 
+  keep_cols <- intersect(metadata_categories_keep, names(all_metadata_df))
+  select_metadata_df <- all_metadata_df[, keep_cols, drop = FALSE]
 
-  # split basic info and feature table
-  basic_info_df <- select_metadata_df[, grep("GBSeq_locus|GBSeq_length|GBSeq_strandedness|GBSeq_update.date|GBSeq_create.date|GBSeq_definition|GBSeq_accession.version|GBSeq_project|GBSeq_organism|GBSeq_taxonomy|GBSeq_sequence",
-                                             x = names(select_metadata_df))]
-  feature_table_df <- select_metadata_df[, grep("GBSeq_feature.table", x = names(select_metadata_df))]
+  # split "basic" vs "feature table" (both dot and hyphen)
+  basic_pat   <- "GBSeq_locus|GBSeq_length|GBSeq_strandedness|GBSeq_update\\.date|GBSeq_create\\.date|GBSeq_definition|GBSeq_accession\\.version|GBSeq_project|GBSeq_organism|GBSeq_taxonomy|GBSeq_sequence"
+  feature_pat <- "GBSeq_feature\\.table|GBSeq_feature-table"
 
-  # transform feature qualifiers: use *_name values as column names
-  name_cols <- which(grepl("_name", colnames(feature_table_df)))
-  feature_transformed_df <- data.frame(feature_table_df[, name_cols + 1])
-  colnames(feature_transformed_df) <- feature_table_df[, name_cols]
+  basic_cols   <- grep(basic_pat,   names(select_metadata_df), value = TRUE)
+  feature_cols <- grep(feature_pat, names(select_metadata_df), value = TRUE)
 
-  metadata_entry <- cbind(basic_info_df, feature_transformed_df)
-  names(metadata_entry) <- sub("GBSeq_", "", names(metadata_entry))
-  data.table::setnames(metadata_entry, old = "locus", new = "Accession")
-  data.table::setnames(metadata_entry, old = "definition", new = "accession_title")
+  basic_info_df    <- select_metadata_df[, basic_cols,   drop = FALSE]
+  feature_table_df <- select_metadata_df[, feature_cols, drop = FALSE]
 
-  return(metadata_entry) 
+  # transform feature table: use *_name columns as new column names, values from the next column
+  if (ncol(feature_table_df) > 0L) {
+    # Find columns whose names end with "_name" (e.g., GBQualifier_name, GBFeature_quals.GBQualifier_name, etc.)
+    name_idx <- which(grepl("_name$", colnames(feature_table_df)))
+    if (length(name_idx)) {
+      valid_pairs <- name_idx[name_idx + 1L <= ncol(feature_table_df)]
+      if (length(valid_pairs)) {
+        value_idx <- valid_pairs + 1L
+        feat_trans <- data.frame(feature_table_df[, value_idx, drop = FALSE], check.names = FALSE, stringsAsFactors = FALSE)
+        colnames(feat_trans) <- feature_table_df[, valid_pairs, drop = TRUE]
+      } else {
+        feat_trans <- data.frame()
+      }
+    } else {
+      feat_trans <- data.frame()
+    }
+  } else {
+    feat_trans <- data.frame()
+  }
+
+  # combine basic + transformed features
+  metadata_entry <- cbind(basic_info_df, feat_trans)
+
+  # normalize column names and key fields 
+  names(metadata_entry) <- sub("^GBSeq_", "", names(metadata_entry))
+  if ("locus" %in% names(metadata_entry)) {
+    data.table::setnames(metadata_entry, "locus", "Accession")
+  } else {
+    # ensure Accession column exists even if locus was absent
+    metadata_entry$Accession <- accession
+  }
+  if ("definition" %in% names(metadata_entry)) {
+    data.table::setnames(metadata_entry, "definition", "accession_title")
+  }
+
+  as.data.frame(metadata_entry, stringsAsFactors = FALSE)
 }
+
 
 retrieve_ncbi_metadata <- function(project_name) {
   accession_list <- read.csv("./intermediate_files/all_pulled_accessions.csv", header = TRUE)
 
-  # Split by taxon if available; otherwise treat as a single group ("ALL")
+  # Split by taxon if available, otherwise treat as a single group ("ALL")
   if ("genus" %in% names(accession_list)) {
     taxa_groups <- split(accession_list, accession_list$genus)
   } else {
@@ -274,7 +330,7 @@ retrieve_ncbi_metadata <- function(project_name) {
   cat("\nStarting metadata retrieval for", nrow(accession_list), "accessions across",
       length(taxa_groups), "taxon group(s)...\n")
 
-  # Loop over taxa (genus) blocks; time each block
+  # Loop over taxa (genus) blocks,time each block
   for (tx in names(taxa_groups)) {
     block <- taxa_groups[[tx]]
     taxon_start <- Sys.time()

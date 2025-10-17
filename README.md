@@ -86,7 +86,7 @@ Exaplaination of options:
 
 `search_options` Change to fit your search needs. Use the terms for the [NCBI advanced search](https://www.ncbi.nlm.nih.gov/nuccore/advanced). 
 
-`max_acc_per_taxa` Maximum number of accessions to obtain for each taxa/region search. Use the option "max" to retrieve **all** the matching NCBI hits -- but be warned that for taxa with many accessions (Fusarium, Alternaria, etc.) this can make the metadata retreival step take **a really long time**. 
+`max_acc_per_taxa` Maximum number of accessions to obtain for each taxa/region search. Use the option "max" to retrieve **all** the matching NCBI hits -- but be warned that for taxa with many accessions (Fusarium, Alternaria, etc.) this can make the metadata retreival step take <u>**a really long time**<\u>. 
 
 `ncbi_api_key` Your NCBI API key. If you didn't set up your R environment with your API key, you can do it here.
 
@@ -105,11 +105,8 @@ my_lab_sequences   <- ""  # Optional. Leave blank or provide a path to a CSV wit
 save_project_config(
   project_dir            = getwd(),
   project_name           = project_name,
-  taxa_of_interest       = taxa_of_interest,
-  regions_to_include     = NULL,                 
-  min_region_requirement = NULL,                 
+  taxa_of_interest       = taxa_of_interest,          
   my_lab_sequences       = my_lab_sequences,
-  acc_to_exclude         = acc_to_exclude,
   organism_scope         = organism_scope,
   search_options         = search_options,
   max_acc_per_taxa       = max_acc_per_taxa    
