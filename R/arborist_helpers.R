@@ -20,8 +20,23 @@ load_required_packages <- function() {
   invisible(lapply(required_packages, library, character.only = TRUE))
 }
 
+
+# Defaults for entrez search term (user can override in run script)
+if (!exists("organism_scope")) {
+  organism_scope <- "txid4751[Organism:exp]"  # default is Fungi + descendants
+}
+if (!exists("search_options")) {
+  search_options <- "(biomol_genomic[PROP] AND (100[SLEN]:5000[SLEN])) NOT Contig[All Fields] NOT scaffold[All Fields] NOT genome[All Fields]" # this is my preferred default
+}
+
+compose_entrez_term <- function(taxon,
+                                organism_scope = organism_scope,
+                                extra_filters = search_options) {
+  parts <- c(sprintf('("%s"[All Fields])', taxon), organism_scope, extra_filters)
+  paste(Filter(nzchar, parts), collapse = " AND ")
+}
+
 # defaults for metadata "keep" category
-# default keep-list if not provided by user
 if (!exists("metadata_categories_keep")) {
   metadata_categories_keep <- c(
     "GBSeq_locus","GBSeq_length","GBSeq_strandedness","GBSeq_moltype",
@@ -56,9 +71,13 @@ if (exists("ncbi_api_key") && !is.null(ncbi_api_key) && nzchar(ncbi_api_key)) {
 }
 
 # Fetch accessions from NCBI
-fetch_accessions_for_taxon <- function(taxon, max_acc = max_acc_per_taxa) {
+fetch_accessions_for_taxon <- function(taxon,
+                                       max_acc = max_acc_per_taxa,
+                                       organism_scope = organism_scope,
+                                       extra_filters = search_options) {
+  filters <- compose_entrez_term(taxon, organism_scope, extra_filters)
   cat("Searching term:", taxon, "\n")
-  filters <- paste0("(", taxon, "[All Fields] AND Fungi[Organism])")
+
   # allows up to 9,999 ids without webhistory
   search <- rentrez::entrez_search(db = "nucleotide", term = filters, retmax = 9999)
   
@@ -115,14 +134,21 @@ fetch_accessions_for_taxon <- function(taxon, max_acc = max_acc_per_taxa) {
   }
 }
 
-get_accessions_for_all_taxa <- function(taxa_list, max_acc_per_taxa) {
-  taxa_frame_acc <- list()
-  timing_log <- data.frame(Taxon = character(),
-                           Num_accessions = integer(),
-                           Start_time = character(),
-                           End_time = character(),
-                           Elapsed_minutes = numeric(),
-                           stringsAsFactors = FALSE)
+get_accessions_for_all_taxa <- function(taxa_list,
+                                        max_acc_per_taxa,
+                                        organism_scope = organism_scope,
+                                        extra_filters = search_options,
+                                        timing_file = "./intermediate_files/fetch_times_accessions.csv") {
+  taxa_frame_acc <- vector("list", length(taxa_list))
+
+  timing_log <- data.frame(
+    Taxon = character(),
+    Num_accessions = integer(),
+    Start_time = character(),
+    End_time = character(),
+    Elapsed_minutes = numeric(),
+    stringsAsFactors = FALSE
+  )
 
   overall_start <- Sys.time()
 
@@ -132,7 +158,12 @@ get_accessions_for_all_taxa <- function(taxa_list, max_acc_per_taxa) {
     start_time <- Sys.time()
 
     tempdf <- tryCatch({
-      fetch_accessions_for_taxon(term, max_acc = max_acc_per_taxa)
+      fetch_accessions_for_taxon(
+        taxon = term,
+        max_acc = max_acc_per_taxa,
+        organism_scope = organism_scope,
+        extra_filters = extra_filters
+      )
     }, error = function(e) {
       cat("ERROR:", conditionMessage(e), "\n")
       data.frame(Accession = character(0), genus = term, stringsAsFactors = FALSE)
@@ -143,35 +174,45 @@ get_accessions_for_all_taxa <- function(taxa_list, max_acc_per_taxa) {
     cat(sprintf("Finished %s in %.2f minutes\n", term, elapsed))
 
     # record timing
-    timing_log <- rbind(timing_log, data.frame(
-      Taxon = term,
-      Num_accessions = nrow(tempdf),
-      Start_time = format(start_time, "%Y-%m-%d %H:%M:%S"),
-      End_time = format(end_time, "%Y-%m-%d %H:%M:%S"),
-      Elapsed_minutes = round(elapsed, 2),
-      stringsAsFactors = FALSE
-    ))
+    timing_log <- rbind(
+      timing_log,
+      data.frame(
+        Taxon = term,
+        Num_accessions = nrow(tempdf),
+        Start_time = format(start_time, "%Y-%m-%d %H:%M:%S"),
+        End_time = format(end_time, "%Y-%m-%d %H:%M:%S"),
+        Elapsed_minutes = round(elapsed, 2),
+        stringsAsFactors = FALSE
+      )
+    )
 
-    # save per-taxon accessions
+    # save per-taxon accessions (even if empty, so users see it was checked)
     outfile_name <- paste0("./intermediate_files/Accessions_for_", term, ".csv")
     write.csv(tempdf, outfile_name, row.names = FALSE, quote = FALSE)
+
     taxa_frame_acc[[i]] <- tempdf
   }
 
   total_elapsed <- as.numeric(difftime(Sys.time(), overall_start, units = "mins"))
   cat("\nAll taxa completed in", round(total_elapsed, 2), "minutes.\n")
 
-  # save the full accession list
-  accession_list <- do.call(rbind, taxa_frame_acc)
+  # bind all results (handle case where some/all are empty)
+  non_empty <- Filter(function(x) nrow(x) > 0, taxa_frame_acc)
+  accession_list <- if (length(non_empty)) {
+    do.call(rbind, non_empty)
+  } else {
+    data.frame(Accession = character(0), genus = character(0), stringsAsFactors = FALSE)
+  }
+
+  # save master list
   write.csv(accession_list, "./intermediate_files/all_pulled_accessions.csv", row.names = FALSE)
 
-  # save timing log
-  write.csv(timing_log, "./intermediate_files/fetch_times.csv", row.names = FALSE)
-  cat("Timing log written to ./intermediate_files/fetch_times.csv\n")
+  # save timing log (renamed per your preference)
+  write.csv(timing_log, timing_file, row.names = FALSE)
+  cat("Timing log written to ", timing_file, "\n", sep = "")
 
   return(accession_list)
 }
-
 
 
 # Metadata retrieval

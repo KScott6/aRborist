@@ -50,7 +50,7 @@ This will automatically create an R project file "aRborist.Rproj". Continue work
 ### 3) Install/load the required packages
 
 ```R
-source("prepare.R")   # installs any missing packages required by aRborist
+source(file.path("R", "prepare.R"))  # installs any missing packages required by aRborist
 ```
 
 The first time setup is now complete.
@@ -81,16 +81,20 @@ start_project(projects_dir, project_name) # this will create a project folder in
 Exaplaination of options:
 
 `taxa_of_interest` Provide a list of genus or species names to search on NCBI. 
+`organism_scope` Change to your organisms' correct kingdom. You can use NCBI taxonomy codes or simple names ("txid2[Organism:exp]" = "Bacteria[Organism:exp]"; "txid33090[Organism:exp]" = "Viridiplantae"). Fungi (txid4751) is the default option. Using this option helps reduce the number of incorrect hits during your search, but you could also leave this option blank ("") to not have any organism contraints in your search. 
+`search_options` Change to fit your search needs. Use the terms for the [NCBI advanced search](https://www.ncbi.nlm.nih.gov/nuccore/advanced). 
 `max_acc_per_taxa` Maximum number of accessions to obtain for each taxa/region search. Use the option "max" to retrieve **all** the matching NCBI hits -- but be warned that for taxa with many accessions (Fusarium, Alternaria, etc.) this can make the metadata retreival step take **a really long time**. 
 `ncbi_api_key` Your NCBI API key. If you didn't set up your R environment with your API key, you can do it here.
-`my_lab_sequences` If you want to include your own lab sequences, provide a 5-column csv with Accession, strain, sequence, organism, and gene columns (see test_custom_seq.csv for an example).
+`my_lab_sequences` If you want to include your own lab sequences, provide a 5-column csv with Accession, strain, sequence, organism, and gene columns (see [example_lab_seq_input.csv](example_data/example_lab_seq_input.csv) for an example).
 
 ```R
 # Set options for this project
 taxa_of_interest   <- c("Blackwellomyces", "Flavocillium") # provide list of taxa
+organism_scope <- "txid4751[Organism:exp]" # Set organism constraint. Provide NCBI taxonomy ID or common name. Fungi (txid4751) is the default option. Leave blank ("") to disregard organism constraint entirely (not recommended).
+search_options <- "(biomol_genomic[PROP] AND (100[SLEN]:5000[SLEN])) NOT Contig[All Fields] NOT scaffold[All Fields] NOT genome[All Fields]" # default shown. Use NCBI advanced search terms. 
 max_acc_per_taxa   <- 1000 # put "max" if you want all the matching hits per search/region search, otherwise indicate an integer.
 ncbi_api_key <- Sys.getenv("NCBI_API_KEY")  # recommended
-my_lab_sequences   <- ""  # Optional. leave blank or provide a path to your CSV with lab info
+my_lab_sequences   <- ""  # Optional. Leave blank or provide a path to a CSV with lab sequence info
 
 # Save the exact options you used in your project folder (for reproducibility)
 save_project_config(
@@ -98,7 +102,9 @@ save_project_config(
   project_name = project_name,
   taxa_of_interest = taxa_of_interest,
   max_acc_per_taxa = max_acc_per_taxa,
-  my_lab_sequences = my_lab_sequences
+  my_lab_sequences = my_lab_sequences,
+  organism_scope = organism_scope,
+  search_options = search_options
 )
 ```
 
