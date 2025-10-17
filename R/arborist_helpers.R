@@ -281,27 +281,7 @@ fetch_metadata_for_accession <- function(accession) {
   as.data.frame(metadata_entry, stringsAsFactors = FALSE)
 }
 
-
-
-  # combine basic + transformed features
-  metadata_entry <- cbind(basic_info_df, feat_trans)
-
-  # normalize column names and key fields 
-  names(metadata_entry) <- sub("^GBSeq_", "", names(metadata_entry))
-  if ("locus" %in% names(metadata_entry)) {
-    data.table::setnames(metadata_entry, "locus", "Accession")
-  } else {
-    # ensure Accession column exists even if locus was absent
-    metadata_entry$Accession <- accession
-  }
-  if ("definition" %in% names(metadata_entry)) {
-    data.table::setnames(metadata_entry, "definition", "accession_title")
-  }
-
-  as.data.frame(metadata_entry, stringsAsFactors = FALSE)
-}
-
-
+# metadata retrieval
 retrieve_ncbi_metadata <- function(project_name) {
   accession_list <- read.csv("./intermediate_files/all_pulled_accessions.csv", header = TRUE)
 
