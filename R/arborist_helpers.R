@@ -230,7 +230,6 @@ get_accessions_for_all_taxa <- function(taxa_list,
 
 # Metadata retrieval
 fetch_metadata_for_accession <- function(accession) {
-  # default keep list if user didn't define one
   if (!exists("metadata_categories_keep", .GlobalEnv)) {
     metadata_categories_keep <- c(
       "GBSeq_locus","GBSeq_length","GBSeq_strandedness","GBSeq_moltype",
@@ -240,22 +239,17 @@ fetch_metadata_for_accession <- function(accession) {
     )
   }
 
-  # fetch XML and coerce to data.frame 
   out.xml <- rentrez::entrez_fetch(db = "nuccore", id = accession, rettype = "xml")
   list.out <- XML::xmlToList(out.xml)
-
   if (length(list.out) == 0L) {
     return(data.frame(Accession = accession, stringsAsFactors = FALSE))
   }
-
   accession_dfs <- lapply(list.out, data.frame, stringsAsFactors = FALSE)
   all_metadata_df <- accession_dfs[[1]]
 
-  # keep only columns that actually exist in this record 
   keep_cols <- intersect(metadata_categories_keep, names(all_metadata_df))
   select_metadata_df <- all_metadata_df[, keep_cols, drop = FALSE]
 
-  # split "basic" vs "feature table" (both dot and hyphen)
   basic_pat   <- "GBSeq_locus|GBSeq_length|GBSeq_strandedness|GBSeq_update\\.date|GBSeq_create\\.date|GBSeq_definition|GBSeq_accession\\.version|GBSeq_project|GBSeq_organism|GBSeq_taxonomy|GBSeq_sequence"
   feature_pat <- "GBSeq_feature\\.table|GBSeq_feature-table"
 
@@ -265,25 +259,28 @@ fetch_metadata_for_accession <- function(accession) {
   basic_info_df    <- select_metadata_df[, basic_cols,   drop = FALSE]
   feature_table_df <- select_metadata_df[, feature_cols, drop = FALSE]
 
-  # transform feature table: use *_name columns as new column names, values from the next column
   if (ncol(feature_table_df) > 0L) {
-    # Find columns whose names end with "_name" (e.g., GBQualifier_name, GBFeature_quals.GBQualifier_name, etc.)
     name_idx <- which(grepl("_name$", colnames(feature_table_df)))
-    if (length(name_idx)) {
-      valid_pairs <- name_idx[name_idx + 1L <= ncol(feature_table_df)]
-      if (length(valid_pairs)) {
-        value_idx <- valid_pairs + 1L
-        feat_trans <- data.frame(feature_table_df[, value_idx, drop = FALSE], check.names = FALSE, stringsAsFactors = FALSE)
-        colnames(feat_trans) <- feature_table_df[, valid_pairs, drop = TRUE]
-      } else {
-        feat_trans <- data.frame()
-      }
+    valid_pairs <- name_idx[name_idx + 1L <= ncol(feature_table_df)]
+    if (length(valid_pairs)) {
+      feat_trans <- data.frame(feature_table_df[, valid_pairs + 1L, drop = FALSE],
+                               check.names = FALSE, stringsAsFactors = FALSE)
+      colnames(feat_trans) <- feature_table_df[, valid_pairs, drop = TRUE]
     } else {
-      feat_trans <- data.frame()
+      feat_trans <- basic_info_df[, 0, drop = FALSE]
     }
   } else {
-    feat_trans <- data.frame()
+    feat_trans <- basic_info_df[, 0, drop = FALSE]
   }
+
+  metadata_entry <- cbind(basic_info_df, feat_trans)
+  names(metadata_entry) <- sub("^GBSeq_", "", names(metadata_entry))
+  if ("locus" %in% names(metadata_entry)) data.table::setnames(metadata_entry, "locus", "Accession") else metadata_entry$Accession <- accession
+  if ("definition" %in% names(metadata_entry)) data.table::setnames(metadata_entry, "definition", "accession_title")
+
+  as.data.frame(metadata_entry, stringsAsFactors = FALSE)
+}
+
 
   # combine basic + transformed features
   metadata_entry <- cbind(basic_info_df, feat_trans)

@@ -45,7 +45,7 @@ install.packages("usethis") # if needed
 usethis::create_from_github("KScott6/aRborist")
 ```
 
-This will automatically create an R project file "aRborist.Rproj". Continue working in this project file.
+This will automatically create an R project file "aRborist.Rproj". You can working in this project file.
 
 ### 3) Install/load the required packages
 
@@ -68,13 +68,20 @@ load_required_packages()
 
 ### 2) Create a new project workspace (run once per new project)
 
-Name each of your projects something unique. You can revisit individual projects later on by referencing their project name.
+Set the location you prefer to have your aRborist project folder in; ("~") is default. Then, select a unique name for your project. You can revisit individual projects later on by referencing their project name.
 
 ```R
-projects_dir <- file.path(path.expand("~"), "aRborist_Projects") # this creates a folder which will store all of your arborist projects
-project_name <- "Blackwellomyces_tree_2025_10_16" # this is an examle project name. Set your project name to whatever you want.
-start_project(projects_dir, project_name) # this will create a project folder in "aRborist_Projects", based on your provided project name
+projects_dir <- file.path(path.expand("~"), "aRborist_Projects")
+project_name <- "Blackwellomyces_tree_2025_10_16"
 ```
+
+Then run:
+
+```R
+start_project(projects_dir, project_name) 
+```
+
+This will automatically create the necessary project folders and subfolders. 
 
 ### 3) Set options for your project
 
@@ -82,24 +89,24 @@ Exaplaination of options:
 
 `taxa_of_interest` Provide a list of genus or species names to search on NCBI. 
 
-`organism_scope` Change to your organisms' correct kingdom. You can use NCBI taxonomy codes or simple names ("txid2[Organism:exp]" = "Bacteria[Organism:exp]"; "txid33090[Organism:exp]" = "Viridiplantae"). Fungi (txid4751) is the default option. Using this option helps reduce the number of incorrect hits during your search, but you could also leave this option blank ("") to not have any organism contraints in your search. 
+`organism_scope` Change to your target taxa's correct kingdom. You can use either NCBI taxonomy codes or simple names ("txid2[Organism:exp]" = "Bacteria[Organism:exp]"; "txid33090[Organism:exp]" = "Viridiplantae"). Fungi (txid4751) is the default option. Using this option helps reduce the number of incorrect hits during your search. Leave blank ("") to not have any organism contraints in your search (not recommended).
 
-`search_options` Change to fit your search needs. Use the terms for the [NCBI advanced search](https://www.ncbi.nlm.nih.gov/nuccore/advanced). 
+`search_options` Change to fit your search needs. Use the terms for the [NCBI advanced search](https://www.ncbi.nlm.nih.gov/nuccore/advanced). The default search string is shown.
 
-`max_acc_per_taxa` Maximum number of accessions to obtain for each taxa/region search. Use the option "max" to retrieve **all** the matching NCBI hits -- but be warned that for taxa with many accessions (Fusarium, Alternaria, etc.) this can make the metadata retreival step take <u>**a really long time**<\u>. 
+`max_acc_per_taxa` Provive integer value to specify the maximum number of accessions to obtain for each taxon name. Use the option "max" to retrieve **all** the matching NCBI hits -- but be warned that for taxa with many accessions (Fusarium, Alternaria, etc.) this can make the metadata retreival step take <u>**a really long time**</u> (days). 
 
-`ncbi_api_key` Your NCBI API key. If you didn't set up your R environment with your API key, you can do it here.
+`ncbi_api_key` Your NCBI API key. If you didn't set up your R environment with your API key, you can specify it here in quotes.
 
-`my_lab_sequences` If you want to include your own lab sequences, provide a 5-column csv with Accession, strain, sequence, organism, and gene columns (see [example_lab_seq_input.csv](example_data/example_lab_seq_input.csv) for an example).
+`my_lab_sequences` Optional. If you want to include your own lab sequences, provide a 5-column csv with Accession, strain, sequence, organism, and gene columns (see [example_lab_seq_input.csv](example_data/example_lab_seq_input.csv) for an example).
 
 ```R
 # Set options for this project
-taxa_of_interest   <- c("Blackwellomyces", "Flavocillium") # provide list of taxa
-organism_scope <- "txid4751[Organism:exp]" # Set organism constraint. Provide NCBI taxonomy ID or common name. Fungi (txid4751) is the default option. Leave blank ("") to disregard organism constraint entirely (not recommended).
-search_options <- "(biomol_genomic[PROP] AND (100[SLEN]:5000[SLEN])) NOT Contig[All Fields] NOT scaffold[All Fields] NOT genome[All Fields]" # default shown. Use NCBI advanced search terms. 
-max_acc_per_taxa   <- 1000 # put "max" if you want all the matching hits per search/region search, otherwise indicate an integer.
-ncbi_api_key <- Sys.getenv("NCBI_API_KEY")  # recommended to provide an API key. Provide your key here in quotes, if you didn't set it up in your environment previously.
-my_lab_sequences   <- ""  # Optional. Leave blank or provide a path to a CSV with lab sequence info
+taxa_of_interest   <- c("Blackwellomyces", "Flavocillium")
+organism_scope <- "txid4751[Organism:exp]"
+search_options <- "(biomol_genomic[PROP] AND (100[SLEN]:5000[SLEN])) NOT Contig[All Fields] NOT scaffold[All Fields] NOT genome[All Fields]"
+max_acc_per_taxa   <- 1000 # "max" for all matching hits
+ncbi_api_key <- Sys.getenv("NCBI_API_KEY")
+my_lab_sequences   <- "" 
 
 # Save the exact options you used in your project folder (for reproducibility)
 save_project_config(
@@ -126,13 +133,13 @@ ncbi_data_fetch(project_name, max_acc_per_taxa, taxa_of_interest)
 
 ### set options for filtering
 
-`regions_to_include` Provide a list of loci of interest. Try to use the spelling/abbreviations commonly used on NCBI (e.g. if you search "TEF1" you'll get many more hits than if you searched "ef-1").
+`regions_to_include` Provide a list of loci of interest. Try to use the spelling/abbreviations commonly used on NCBI (e.g. if you search "TEF1" you'll get many more hits than if you searched "ef-1"). **should these match the output of the curation terms??**
 
 `min_region_requirement` The number of user-specified loci an isolate must have in order to progress to be included in final downstream analyses. 
 
 ```R
-regions_to_include <- c("RPB2", "TEF", "ITS") # leave blank ("") if you don't want to filter your search by loci.
-min_region_requirement <- length(regions_to_include) # leave as-is if you require all isolates to have all specified regions to be included in the final downstream analyses.
+regions_to_include <- c("RPB2", "TEF", "ITS")
+min_region_requirement <- length(regions_to_include)
 ```
 
 <br>
