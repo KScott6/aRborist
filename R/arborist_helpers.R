@@ -498,7 +498,7 @@ accession_list$strain.standard <- stringr::str_remove_all(
 
   write.csv(
     accession_list,
-    paste0("./metadata_files/all_accessions_pulled_metadata_", project_name, "_curated_basic.csv"),
+    paste0("./metadata_files/all_accessions_pulled_metadata_", project_name, "_curated.csv"),
     row.names = FALSE
   )
   cat("Wrote basic curated metadata.\n")
@@ -509,7 +509,7 @@ curate_metadata_regions <- function(project_name,
                                     mapping_file = "./aRborist/example_data/region_replacement_patterns.csv") {
   # 0) read the input from the basic curation step
   infile  <- paste0("./metadata_files/all_accessions_pulled_metadata_",
-                    project_name, "_curated_basic.csv")
+                    project_name, "_curated.csv")
   acc_df  <- read.csv(infile, header = TRUE, stringsAsFactors = FALSE)
 
   # 1) set up the component columns we actually want to keep

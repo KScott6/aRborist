@@ -1,0 +1,21 @@
+﻿pattern,standard
+tef-*\\d*,TEF
+EF1-alpha,TEF
+ef1a,TEF
+b-tub,BTUB
+TUB2,BTUB
+RBP2,RPB2
+RPB2,RPB2
+RBP1,RPB1
+RPB1,RPB1
+elongation factor 1,TEF
+internal transcribed,ITS
+26S,LSU
+28S,LSU
+small subunit ribosomal,SSU
+^large[st]* subunit ribosomal,LSU
+beta-tubulin,BTUB
+actin beta,actin
+licensing\\D*7\\D*,MCM7
+polymerase II larg[est]*,RPB1
+polymerase II second largest,RPB2
