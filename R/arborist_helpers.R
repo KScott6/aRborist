@@ -21,23 +21,38 @@ load_required_packages <- function() {
 }
 
 
-# Defaults for entrez search term (user can override in run script)
-if (!exists("organism_scope")) {
-  organism_scope <- "txid4751[Organism:exp]"  # default is Fungi + descendants
-}
-if (!exists("search_options")) {
-  search_options <- "(biomol_genomic[PROP] AND (100[SLEN]:5000[SLEN])) NOT Contig[All Fields] NOT scaffold[All Fields] NOT genome[All Fields]" # this is my preferred default
+# Defaults for entrez search term (need to change later so users can override in run script)
+if (!exists("organism_scope", .GlobalEnv) ||
+    is.null(organism_scope) ||
+    !nzchar(organism_scope)) {
+  assign("organism_scope", "txid4751[Organism:exp]", .GlobalEnv)
 }
 
-compose_entrez_term <- function(taxon, organism_scope = NULL, extra_filters = NULL) {
-  if (is.null(organism_scope) && exists("organism_scope", .GlobalEnv))
-    organism_scope <- get("organism_scope", envir = .GlobalEnv)
-  if (is.null(extra_filters) && exists("search_options", .GlobalEnv))
-    extra_filters <- get("search_options", envir = .GlobalEnv)
-
-  parts <- c(sprintf('("%s"[All Fields])', taxon), organism_scope, extra_filters)
-  paste(Filter(function(z) !is.null(z) && nzchar(z), parts), collapse = " AND ")
+if (!exists("search_options", .GlobalEnv) ||
+    is.null(search_options) ||
+    !nzchar(search_options)) {
+  assign("search_options",
+         "(biomol_genomic[PROP]) AND (100[SLEN]:5000[SLEN]) AND is_nuccore[filter] AND NOT mitochondrion[filter]",
+         .GlobalEnv)
 }
+
+
+
+compose_entrez_term <- function(taxon,
+                                organism_scope = NULL,
+                                extra_filters  = NULL) {
+  q <- sprintf('("%s"[Organism])', taxon)
+
+  if (!is.null(organism_scope) && nzchar(organism_scope)) {
+    q <- paste(q, organism_scope, sep = " AND ")
+  }
+  if (!is.null(extra_filters) && nzchar(extra_filters)) {
+    q <- paste(q, extra_filters, sep = " AND ")
+  }
+  q
+}
+
+
 
 # default metadata categories to keep in search
 if (!exists("metadata_categories_keep", .GlobalEnv)) {
@@ -80,17 +95,15 @@ fetch_accessions_for_taxon <- function(taxon,
                                        extra_filters  = NULL) {
   cat("Searching term:", taxon, "\n")
 
-  # resolving defaults from globals, if needed
   if (is.null(organism_scope) && exists("organism_scope", .GlobalEnv))
-    organism_scope <- get("organism_scope", envir = .GlobalEnv)
+    organism_scope <- get("organism_scope", .GlobalEnv)
   if (is.null(extra_filters) && exists("search_options", .GlobalEnv))
-    extra_filters <- get("search_options", envir = .GlobalEnv)
+    extra_filters <- get("search_options", .GlobalEnv)
 
   filters <- compose_entrez_term(taxon, organism_scope, extra_filters)
 
   search <- rentrez::entrez_search(db = "nucleotide", term = filters, retmax = 9999)
 
-  # No results returns a zero-row df
   if (length(search$ids) == 0) {
     cat("No accessions found for:", taxon, "\n")
     return(data.frame(Accession = character(0), genus = character(0), stringsAsFactors = FALSE))
@@ -105,51 +118,56 @@ fetch_accessions_for_taxon <- function(taxon,
     pull_n <- min(total_accession_count, max_n)
     cat(total_accession_count, "accessions available for", taxon, "- pulling a maximum of", pull_n, "\n")
 
-    temp_filename <- paste0("./temp_files/temp_file_accessions_from_", taxon, ".txt")
-    if (file.exists(temp_filename)) file.remove(temp_filename)
+    tmp <- paste0("./temp_files/temp_file_accessions_from_", taxon, ".txt")
+    if (file.exists(tmp)) file.remove(tmp)
 
     for (seq_start in seq(0, pull_n - 1, by = 50)) {
-      recs <- rentrez::entrez_fetch(db = "nuccore",
-                                    web_history = large_search$web_history,
-                                    rettype = "acc",
-                                    retmax = min(50, pull_n - seq_start),
-                                    retstart = seq_start)
-      cat(recs, file = temp_filename, append = TRUE)
+      recs <- rentrez::entrez_fetch(
+        db = "nuccore",
+        web_history = large_search$web_history,
+        rettype = "acc",
+        retmax = min(50, pull_n - seq_start),
+        retstart = seq_start
+      )
+      cat(recs, file = tmp, append = TRUE)
       Sys.sleep(get_sleep_duration())
-      cat(seq_start + min(49, pull_n - seq_start - 1), "accessions recorded\r")
     }
 
-    large_temp_df <- read.table(temp_filename, stringsAsFactors = FALSE)
-    colnames(large_temp_df) <- c("Accession")
-    large_temp_df$genus <- taxon
-    if (file.exists(temp_filename)) file.remove(temp_filename)
+    df <- read.table(tmp, stringsAsFactors = FALSE)
+    colnames(df) <- "Accession"
+    df$genus <- taxon
+    file.remove(tmp)
     cat("Accession retrieval for", taxon, "successful\n\n")
-    return(large_temp_df)
+    return(df)
   }
 
-  # Normal path (≤ 9,999)
   ids <- search$ids
-  if (is.finite(max_n)) ids <- utils::head(ids, max_n)
+  if (is.finite(max_n)) {
+    ids <- utils::head(ids, max_n)
+  }
 
   if (length(ids) <= 300) {
     summary <- rentrez::entrez_summary(db = "nuccore", id = ids)
     Sys.sleep(get_sleep_duration())
   } else {
     summary <- list()
-    index <- split(seq_along(ids), ceiling(seq_along(ids) / 300))
-    for (p in index) {
+    idx <- split(seq_along(ids), ceiling(seq_along(ids) / 300))
+    for (p in idx) {
       summary[p] <- rentrez::entrez_summary(db = "nuccore", id = ids[p])
       Sys.sleep(get_sleep_duration())
     }
     class(summary) <- c("esummary_list", "list")
   }
 
-  tempdf <- data.frame(Accession = unname(rentrez::extract_from_esummary(summary, "caption")),
-                       stringsAsFactors = FALSE)
+  tempdf <- data.frame(
+    Accession = unname(rentrez::extract_from_esummary(summary, "caption")),
+    stringsAsFactors = FALSE
+  )
   tempdf$genus <- taxon
   cat("Search complete for", taxon, " (", nrow(tempdf), " accessions)\n", sep = "")
-  return(tempdf)
+  tempdf
 }
+
 
 get_accessions_for_all_taxa <- function(taxa_list,
                                         max_acc_per_taxa,
@@ -227,59 +245,85 @@ get_accessions_for_all_taxa <- function(taxa_list,
 }
 
 
-
 # Metadata retrieval
 fetch_metadata_for_accession <- function(accession) {
+  # keep list (top-level + qualifier-level)
   if (!exists("metadata_categories_keep", .GlobalEnv)) {
     metadata_categories_keep <- c(
+      # top-level
       "GBSeq_locus","GBSeq_length","GBSeq_strandedness","GBSeq_moltype",
-      "GBSeq_update.date","GBSeq_create.date","GBSeq_definition",
-      "GBSeq_accession.version","GBSeq_project","GBSeq_organism","GBSeq_taxonomy",
-      "GBSeq_sequence","GBSeq_feature.table","_title","_journal","ref_id","pubmed"
+      "GBSeq_update-date","GBSeq_create-date","GBSeq_definition",
+      "GBSeq_accession-version","GBSeq_project","GBSeq_organism","GBSeq_taxonomy",
+      "GBSeq_sequence",
+      # qualifiers
+      "isolation_source","host","country","lat_lon","collection_date","geo_loc_name",
+      "strain","isolate","culture_collection","specimen_voucher",
+      "type_material","identified_by","note","gene","product","db_xref"
     )
   }
 
-  out.xml <- rentrez::entrez_fetch(db = "nuccore", id = accession, rettype = "xml")
-  list.out <- XML::xmlToList(out.xml)
-  if (length(list.out) == 0L) {
-    return(data.frame(Accession = accession, stringsAsFactors = FALSE))
-  }
-  accession_dfs <- lapply(list.out, data.frame, stringsAsFactors = FALSE)
-  all_metadata_df <- accession_dfs[[1]]
+  x <- rentrez::entrez_fetch(db = "nuccore", id = accession, rettype = "xml")
+  doc <- XML::xmlParse(x)
 
-  keep_cols <- intersect(metadata_categories_keep, names(all_metadata_df))
-  select_metadata_df <- all_metadata_df[, keep_cols, drop = FALSE]
+  # top-level fields
+  top_locus     <- XML::xpathSApply(doc, "//GBSeq_locus", xmlValue)
+  top_len       <- XML::xpathSApply(doc, "//GBSeq_length", xmlValue)
+  top_strand    <- XML::xpathSApply(doc, "//GBSeq_strandedness", xmlValue)
+  top_moltype   <- XML::xpathSApply(doc, "//GBSeq_moltype", xmlValue)
+  top_upd       <- XML::xpathSApply(doc, "//GBSeq_update-date", xmlValue)
+  top_create    <- XML::xpathSApply(doc, "//GBSeq_create-date", xmlValue)
+  top_def       <- XML::xpathSApply(doc, "//GBSeq_definition", xmlValue)
+  top_accver    <- XML::xpathSApply(doc, "//GBSeq_accession-version", xmlValue)
+  top_proj      <- XML::xpathSApply(doc, "//GBSeq_project", xmlValue)
+  top_org       <- XML::xpathSApply(doc, "//GBSeq_organism", xmlValue)
+  top_tax       <- XML::xpathSApply(doc, "//GBSeq_taxonomy", xmlValue)
+  top_seq       <- XML::xpathSApply(doc, "//GBSeq_sequence", xmlValue)
 
-  basic_pat   <- "GBSeq_locus|GBSeq_length|GBSeq_strandedness|GBSeq_update\\.date|GBSeq_create\\.date|GBSeq_definition|GBSeq_accession\\.version|GBSeq_project|GBSeq_organism|GBSeq_taxonomy|GBSeq_sequence"
-  feature_pat <- "GBSeq_feature\\.table|GBSeq_feature-table"
+  # qualifiers
+  q_names  <- XML::xpathSApply(doc, "//GBQualifier/GBQualifier_name",  xmlValue)
+  q_values <- XML::xpathSApply(doc, "//GBQualifier/GBQualifier_value", xmlValue)
+  quals <- data.frame(name = q_names, value = q_values, stringsAsFactors = FALSE)
 
-  basic_cols   <- grep(basic_pat,   names(select_metadata_df), value = TRUE)
-  feature_cols <- grep(feature_pat, names(select_metadata_df), value = TRUE)
-
-  basic_info_df    <- select_metadata_df[, basic_cols,   drop = FALSE]
-  feature_table_df <- select_metadata_df[, feature_cols, drop = FALSE]
-
-  if (ncol(feature_table_df) > 0L) {
-    name_idx <- which(grepl("_name$", colnames(feature_table_df)))
-    valid_pairs <- name_idx[name_idx + 1L <= ncol(feature_table_df)]
-    if (length(valid_pairs)) {
-      feat_trans <- data.frame(feature_table_df[, valid_pairs + 1L, drop = FALSE],
-                               check.names = FALSE, stringsAsFactors = FALSE)
-      colnames(feat_trans) <- feature_table_df[, valid_pairs, drop = TRUE]
-    } else {
-      feat_trans <- basic_info_df[, 0, drop = FALSE]
-    }
-  } else {
-    feat_trans <- basic_info_df[, 0, drop = FALSE]
+  # make a named list for qualifiers we care about
+  get_q <- function(nm) {
+    v <- quals$value[quals$name == nm]
+    if (length(v) == 0) "" else paste(unique(v), collapse = "; ")
   }
 
-  metadata_entry <- cbind(basic_info_df, feat_trans)
-  names(metadata_entry) <- sub("^GBSeq_", "", names(metadata_entry))
-  if ("locus" %in% names(metadata_entry)) data.table::setnames(metadata_entry, "locus", "Accession") else metadata_entry$Accession <- accession
-  if ("definition" %in% names(metadata_entry)) data.table::setnames(metadata_entry, "definition", "accession_title")
+  out <- data.frame(
+    Accession          = if (length(top_locus)) top_locus else accession,
+    GBSeq_length       = if (length(top_len)) top_len else NA,
+    GBSeq_strandedness = if (length(top_strand)) top_strand else NA,
+    GBSeq_moltype      = if (length(top_moltype)) top_moltype else NA,
+    GBSeq_update.date  = if (length(top_upd)) top_upd else NA,
+    GBSeq_create.date  = if (length(top_create)) top_create else NA,
+    accession_title    = if (length(top_def)) top_def else NA,
+    GBSeq_accession.version = if (length(top_accver)) top_accver else accession,
+    GBSeq_project      = if (length(top_proj)) top_proj else NA,
+    organism           = if (length(top_org)) top_org else NA,
+    GBSeq_taxonomy     = if (length(top_tax)) top_tax else NA,
+    sequence           = if (length(top_seq)) top_seq else NA,
+    isolation_source   = get_q("isolation_source"),
+    host               = get_q("host"),
+    country            = get_q("country"),
+    lat_lon            = get_q("lat_lon"),
+    collection_date    = get_q("collection_date"),
+    strain             = get_q("strain"),
+    isolate            = get_q("isolate"),
+    culture_collection = get_q("culture_collection"),
+    specimen_voucher   = get_q("specimen_voucher"),
+    type_material      = get_q("type_material"),
+    identified_by      = get_q("identified_by"),
+    note               = get_q("note"),
+    gene               = get_q("gene"),
+    product            = get_q("product"),
+    db_xref            = get_q("db_xref"),
+    stringsAsFactors   = FALSE
+  )
 
-  as.data.frame(metadata_entry, stringsAsFactors = FALSE)
+  out
 }
+
 
 # metadata retrieval
 retrieve_ncbi_metadata <- function(project_name) {
@@ -411,84 +455,253 @@ merge_metadata_with_custom_file <- function(project_name) {
 
 
 # Metadata curation and region selection
-curate_metadata <- function(project_name) {
+curate_metadata_basic <- function(project_name,
+                                  taxa_of_interest = NULL) {
   metadata_file_path <- paste0("./metadata_files/all_accessions_pulled_metadata_", project_name, ".csv")
-  accession_list <- read.csv(metadata_file_path, header = TRUE)
+  accession_list <- read.csv(metadata_file_path, header = TRUE, stringsAsFactors = FALSE)
 
-  # strain.standard naming priority: voucher > strain > isolate > Accession
-  accession_list <- accession_list %>%
-    dplyr::mutate(strain.standard = dplyr::coalesce(specimen_voucher, strain, isolate, Accession))
+  if (!"specimen_voucher" %in% names(accession_list)) accession_list$specimen_voucher <- NA_character_
+  if (!"strain" %in% names(accession_list))           accession_list$strain           <- NA_character_
+  if (!"isolate" %in% names(accession_list))          accession_list$isolate          <- NA_character_
+  if (!"type_material" %in% names(accession_list))    accession_list$type_material    <- NA_character_
+  if (!"geo_loc_name" %in% names(accession_list))     accession_list$geo_loc_name     <- NA_character_
 
-  # strip punctuation/whitespace differences
-  remove_char <- c("\\>", "\\<", "\\s+", ":", ";", "_", "-", "\\.", "\\(", "\\)", "&", "\\|")
-  accession_list$strain.standard <- stringr::str_remove_all(accession_list$strain.standard, paste(remove_char, collapse = "|"))
+  if (!is.null(taxa_of_interest) && length(taxa_of_interest) > 0) {
+    pat <- paste0("^(", paste(taxa_of_interest, collapse = "|"), ")\\b")
+    accession_list <- accession_list[grepl(pat, accession_list$organism), ]
+  }
 
-  # mark TYPE if ANYTHING in type_material category
-  accession_list$strain.standard.type <- ifelse(!is.na(accession_list$type_material),
-                                                paste(accession_list$strain.standard, ".TYPE", sep = ""),
-                                                accession_list$strain.standard)
+# turn "" into NA
+name_cols <- c("specimen_voucher", "strain", "isolate")
+accession_list[name_cols] <- lapply(accession_list[name_cols], function(x) {
+  x[x == ""] <- NA_character_
+  x
+})
 
-  # gene/product/title standardization (add/modify as needed - this is def not an exhaustive list)
-  accession_list$gene.standard <- accession_list$gene
-  accession_list <- accession_list %>%
-    dplyr::mutate(gene.standard = dplyr::case_when(
-      stringr::str_detect(gene.standard, stringr::regex("tef-*\\d*", ignore_case = TRUE)) ~ "TEF",
-      stringr::str_detect(gene.standard, stringr::regex("EF1-alpha", ignore_case = TRUE)) ~ "TEF",
-      stringr::str_detect(gene.standard, stringr::regex("ef1a", ignore_case = TRUE)) ~ "TEF",
-      stringr::str_detect(gene.standard, stringr::regex("b-tub", ignore_case = TRUE)) ~ "BTUB",
-      stringr::str_detect(gene.standard, stringr::regex("TUB2", ignore_case = TRUE)) ~ "BTUB",
-      stringr::str_detect(gene.standard, stringr::regex("RBP2", ignore_case = TRUE)) ~ "RPB2",
-      stringr::str_detect(gene.standard, stringr::regex("RPB2", ignore_case = TRUE)) ~ "RPB2",
-      stringr::str_detect(gene.standard, stringr::regex("RBP1", ignore_case = TRUE)) ~ "RPB1",
-      stringr::str_detect(gene.standard, stringr::regex("RPB1", ignore_case = TRUE)) ~ "RPB1",
-      stringr::str_detect(gene.standard, stringr::regex("act[16]", ignore_case = TRUE)) ~ "actin",
-      TRUE ~ gene.standard
-    ))
+accession_list <- accession_list %>%
+  dplyr::mutate(strain.standard = dplyr::coalesce(specimen_voucher, strain, isolate, Accession))
 
-  accession_list$product.standard <- accession_list$product
-  accession_list <- accession_list %>%
-    dplyr::mutate(product.standard = dplyr::case_when(
-      stringr::str_detect(product.standard, stringr::regex("elongation factor 1", ignore_case = TRUE)) ~ "TEF",
-      stringr::str_detect(product.standard, stringr::regex("18S", ignore_case = TRUE)) ~ "SSU",
-      stringr::str_detect(product.standard, stringr::regex("16S", ignore_case = TRUE)) ~ "SSU",
-      stringr::str_detect(product.standard, stringr::regex("26S", ignore_case = TRUE)) ~ "LSU",
-      stringr::str_detect(product.standard, stringr::regex("28S", ignore_case = TRUE)) ~ "LSU",
-      stringr::str_detect(product.standard, stringr::regex("actin beta", ignore_case = TRUE)) ~ "actin",
-      stringr::str_detect(product.standard, stringr::regex("beta-tubulin", ignore_case = TRUE)) ~ "BTUB",
-      stringr::str_detect(product.standard, stringr::regex("licensing\\D*7\\D*", ignore_case = TRUE)) ~ "MCM7",
-      stringr::str_detect(product.standard, stringr::regex("polymerase II larg[est]*", ignore_case = TRUE)) ~ "RPB1",
-      stringr::str_detect(product.standard, stringr::regex("polymerase II second largest", ignore_case = TRUE)) ~ "RPB2",
-      stringr::str_detect(product.standard, stringr::regex("small subunit ribosomal", ignore_case = TRUE)) ~ "SSU",
-      stringr::str_detect(product.standard, stringr::regex("^large[st]* subunit ribosomal", ignore_case = TRUE)) ~ "LSU",
-      stringr::str_detect(product.standard, stringr::regex("internal transcribed", ignore_case = TRUE)) ~ "ITS",
-      TRUE ~ product.standard
-    ))
+remove_char_pattern <- "[><\\s:;_\\-\\.()&|#/\\\\,'\"!?\\[\\]{}+=%\\*\\^~@$]"
+accession_list$strain.standard <- stringr::str_remove_all(
+  accession_list$strain.standard,
+  remove_char_pattern
+)
 
-  accession_list$acc_title.standard <- accession_list$accession_title
-  accession_list <- accession_list %>%
-    dplyr::mutate(acc_title.standard = dplyr::case_when(
-      stringr::str_detect(acc_title.standard, stringr::regex("actin beta", ignore_case = TRUE)) ~ "actin",
-      stringr::str_detect(acc_title.standard, stringr::regex("beta-*\\s*tubulin", ignore_case = TRUE)) ~ "BTUB",
-      stringr::str_detect(acc_title.standard, stringr::regex("licensing\\D*7\\D*", ignore_case = TRUE)) ~ "MCM7",
-      stringr::str_detect(acc_title.standard, stringr::regex("RPB1", ignore_case = TRUE)) ~ "RPB1",
-      stringr::str_detect(acc_title.standard, stringr::regex("RPB2", ignore_case = TRUE)) ~ "RPB2",
-      stringr::str_detect(acc_title.standard, stringr::regex("internal transcribed.*complete sequence", ignore_case = TRUE)) ~ "ITS",
-      stringr::str_detect(acc_title.standard, stringr::regex("translation elongation", ignore_case = TRUE)) ~ "TEF",
-      TRUE ~ acc_title.standard
-    ))
 
-  accession_list <- accession_list %>%
-    dplyr::mutate(region.standard = dplyr::coalesce(gene.standard, product.standard, acc_title.standard))
+  accession_list$strain.standard.type <- ifelse(
+    !is.na(accession_list$type_material) & accession_list$type_material != "",
+    paste0(accession_list$strain.standard, ".TYPE"),
+    accession_list$strain.standard
+  )
 
   accession_list$org_name <- gsub("\\s+", "\\.", accession_list$organism)
-  accession_list$fasta.header <- paste(">", accession_list$org_name, "_", accession_list$strain.standard, sep = "")
-  accession_list$fasta.header.type <- paste(">", accession_list$org_name, "_", accession_list$strain.standard.type, sep = "")
 
-  write.csv(accession_list,
-            paste0("./metadata_files/all_accessions_pulled_metadata_", project_name, "_curated.csv"),
-            row.names = FALSE)
-  cat("Wrote curated metadata.\n")
+  write.csv(
+    accession_list,
+    paste0("./metadata_files/all_accessions_pulled_metadata_", project_name, "_curated_basic.csv"),
+    row.names = FALSE
+  )
+  cat("Wrote basic curated metadata.\n")
 }
+
+
+curate_metadata_regions <- function(project_name,
+                                    mapping_file = "./aRborist/example_data/region_replacement_patterns.csv") {
+  # 0) read the input from the basic curation step
+  infile  <- paste0("./metadata_files/all_accessions_pulled_metadata_",
+                    project_name, "_curated_basic.csv")
+  acc_df  <- read.csv(infile, header = TRUE, stringsAsFactors = FALSE)
+
+  # 1) set up the component columns we actually want to keep
+  acc_df$gene.region.components      <- NA_character_
+  acc_df$product.region.components   <- NA_character_
+  acc_df$acc_title.region.components <- NA_character_
+
+  # 2) load user/packaged mapping file, if file isn't found there are basic backup patterns
+  if (file.exists(mapping_file)) {
+    message("Using region replacement patterns from: ", mapping_file)
+    map_df <- read.csv(mapping_file, stringsAsFactors = FALSE)
+  } else {
+    warning("Mapping file not found at: ", mapping_file,
+            "\nFalling back to built-in defaults. To customize mappings, copy and edit ",
+            "'./aRborist/example_data/region_replacement_patterns.csv'.")
+    map_df <- data.frame(
+      pattern = c(
+        "tef-*\\d*", "EF1-alpha", "ef1a",
+        "b-tub", "TUB2",
+        "RBP2", "RPB2",
+        "RBP1", "RPB1",
+        "elongation factor 1",
+        "internal transcribed",
+        "26S", "28S",
+        "small subunit ribosomal",
+        "large[st]* subunit ribosomal",
+        "beta-tubulin",
+        "actin beta",
+        "licensing\\D*7\\D*",
+        "polymerase II larg[est]*",
+        "polymerase II second largest",
+        "large subunit ribosomal"
+      ),
+      standard = c(
+        "TEF", "TEF", "TEF",
+        "BTUB", "BTUB",
+        "RPB2", "RPB2",
+        "RPB1", "RPB1",
+        "TEF",
+        "ITS",
+        "LSU", "LSU",
+        "SSU",
+        "LSU",
+        "BTUB",
+        "actin",
+        "MCM7",
+        "RPB1",
+        "RPB2",
+        "LSU"
+      ),
+      stringsAsFactors = FALSE
+    )
+  }
+
+  # helper to append a new component to an existing semicolon list
+  append_component <- function(current, add) {
+    if (is.na(current) || current == "") {
+      add
+    } else {
+      # avoid duplicates like ITS;ITS
+      pattern <- paste0("(^|;)", add, "($|;)")
+      if (grepl(pattern, current)) {
+        current
+      } else {
+        paste(current, add, sep = ";")
+      }
+    }
+  }
+
+  # 3) CSV-based replacements: accumulate matches instead of overwriting
+  for (i in seq_len(nrow(map_df))) {
+    pat <- map_df$pattern[i]
+    std <- map_df$standard[i]
+
+    # gene column
+    hit_gene <- stringr::str_detect(acc_df$gene,
+                                    stringr::regex(pat, ignore_case = TRUE))
+    if (any(hit_gene)) {
+      current_vals <- acc_df$gene.region.components[hit_gene]
+      acc_df$gene.region.components[hit_gene] <- mapply(
+        append_component, current_vals, std, USE.NAMES = FALSE
+      )
+    }
+
+    # product column
+    hit_prod <- stringr::str_detect(acc_df$product,
+                                    stringr::regex(pat, ignore_case = TRUE))
+    if (any(hit_prod)) {
+      current_vals <- acc_df$product.region.components[hit_prod]
+      acc_df$product.region.components[hit_prod] <- mapply(
+        append_component, current_vals, std, USE.NAMES = FALSE
+      )
+    }
+
+    #accession title column (left off for now, but same pattern works)
+    hit_title <- stringr::str_detect(acc_df$accession_title,
+                                      stringr::regex(pat, ignore_case = TRUE))
+     if (any(hit_title)) {
+       current_vals <- acc_df$acc_title.region.components[hit_title]
+       acc_df$acc_title.region.components[hit_title] <- mapply(
+         append_component, current_vals, std, USE.NAMES = FALSE
+       )
+     }
+  }
+
+  # 4) backup default component search (fills only blanks, super basic)
+  detect_components <- function(txt) {
+    if (is.null(txt) || is.na(txt) || txt == "") return(NA_character_)
+
+    patterns <- list(
+      ITS = stringr::regex("internal transcribed spacer|\\bITS\\b", ignore_case = TRUE),
+      SSU = stringr::regex("18S|small subunit ribosomal", ignore_case = TRUE),
+      LSU = stringr::regex("28S|large subunit ribosomal|26S", ignore_case = TRUE)
+    )
+
+    found <- character(0)
+    for (nm in names(patterns)) {
+      if (stringr::str_detect(txt, patterns[[nm]])) {
+        found <- c(found, nm)
+      }
+    }
+    found <- unique(found)
+    if (length(found) == 0) {
+      return(NA_character_)
+    } else {
+      paste(found, collapse = ";")
+    }
+  }
+
+  for (row_i in seq_len(nrow(acc_df))) {
+    # gene
+    if (is.na(acc_df$gene.region.components[row_i]) || acc_df$gene.region.components[row_i] == "") {
+      comp <- detect_components(acc_df$gene[row_i])
+      if (!is.na(comp)) acc_df$gene.region.components[row_i] <- comp
+    }
+
+    # product
+    if (is.na(acc_df$product.region.components[row_i]) || acc_df$product.region.components[row_i] == "") {
+      comp <- detect_components(acc_df$product[row_i])
+      if (!is.na(comp)) acc_df$product.region.components[row_i] <- comp
+    }
+
+    # accession title
+    if (is.na(acc_df$acc_title.region.components[row_i]) || acc_df$acc_title.region.components[row_i] == "") {
+      comp <- detect_components(acc_df$accession_title[row_i])
+      if (!is.na(comp)) acc_df$acc_title.region.components[row_i] <- comp
+    }
+  }
+
+  # 5) final region assignment from components, in priority order
+  acc_df <- acc_df %>%
+    dplyr::mutate(
+      region.standard = dplyr::coalesce(
+        gene.region.components,
+        product.region.components,
+        acc_title.region.components
+      )
+    )
+
+  # 6) fasta headers
+  acc_df$fasta.header      <- paste0(">", acc_df$org_name, "_", acc_df$strain.standard)
+  acc_df$fasta.header.type <- paste0(">", acc_df$org_name, "_", acc_df$strain.standard.type)
+
+  # 7) log unmatched rows
+  unmatched_idx <- which(is.na(acc_df$region.standard) | acc_df$region.standard == "")
+  if (length(unmatched_idx) > 0) {
+    desired_cols <- c(
+      "accession", "Accession",
+      "gene", "product", "accession_title",
+      "gene.region.components",
+      "product.region.components",
+      "acc_title.region.components",
+      "org_name", "strain.standard"
+    )
+    cols_to_log <- intersect(desired_cols, colnames(acc_df))
+    unmatched_df <- acc_df[unmatched_idx, cols_to_log, drop = FALSE]
+
+    unmatched_file <- paste0("./metadata_files/unmatched_regions_",
+                             project_name, ".csv")
+    write.csv(unmatched_df, unmatched_file, row.names = FALSE)
+
+    message("Some records did not match any region pattern. ",
+            "These were written to: ", unmatched_file)
+  }
+
+  # 8) write final curated metadata
+  outfile <- paste0("./metadata_files/all_accessions_pulled_metadata_",
+                    project_name, "_curated.csv")
+  write.csv(acc_df, outfile, row.names = FALSE)
+  cat("Wrote region-curated metadata to:", outfile, "\n")
+}
+
 
 filter_metadata <- function(project_name, taxa_of_interest, acc_to_exclude = NULL) {
   accession_list <- read.csv(paste0("./metadata_files/all_accessions_pulled_metadata_", project_name, "_curated.csv"),
@@ -644,5 +857,3 @@ data_curate <- function(project_name, taxa_of_interest = NULL, acc_to_exclude = 
   select_regions(project_name, min_region_requirement)
   create_multifastas(project_name)
 }
-
-

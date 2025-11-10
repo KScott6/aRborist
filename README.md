@@ -1,6 +1,6 @@
 ## Overview
 
-aRborist is an automated sequence and metadata harvester designed to simplify the process of gathering and organizing sequence data from the **NCBI nucleotide database**. It retrieves accessions for specified taxa, extracts and standardizes metadata, and prepares sequences and metadata for downstream analyses. After using aRborist to pull metadata/sequence data, you can use other aRborist functions to help you make a phylogenetic tree. Or assign host information to your taxa of interest.
+aRborist is an automated sequence and metadata harvester designed to simplify the process of gathering and organizing sequence data and metadata from the **NCBI nucleotide database**. It retrieves accessions for specified taxa, extracts and standardizes metadata, and prepares sequences and metadata for downstream analyses. After using aRborist to pull metadata/sequence data, you can use other aRborist functions to help you make a phylogenetic tree. Or assign host information to your taxa of interest.
 
 - **aRborist Input:** a list of taxa (a list of genus/species names) and a few simple options (loci of interest, your NCBI API, etc.)  
 - **aRborist Output:** curated metadata sheets (can be used to create phylogenetic trees or assign host to taxa, using downstream aRborist pipelines)
@@ -104,7 +104,7 @@ Exaplaination of options:
 taxa_of_interest   <- c("Blackwellomyces", "Flavocillium")
 organism_scope <- "txid4751[Organism:exp]"
 search_options <- "(biomol_genomic[PROP] AND (100[SLEN]:5000[SLEN])) NOT Contig[All Fields] NOT scaffold[All Fields] NOT genome[All Fields]"
-max_acc_per_taxa   <- 1000 # "max" for all matching hits
+max_acc_per_taxa   <- 1000 # specify "max" to obtain all matching hits
 ncbi_api_key <- Sys.getenv("NCBI_API_KEY")
 my_lab_sequences   <- "" 
 
@@ -121,15 +121,120 @@ save_project_config(
 
 ```
 
-### 4) Run aRborist to collect metadata
+### 4) Collect metadata
+
+Another warning - if you set the options to collect a lot of accesssions, this step can take quite a while. 
+
+A note - when you search a term on NCBI, it will sometimes return accessions you are not interested in. For example, if you search "Pandora[organism]", NCBI will return all accessions explictedly labeled as "Pandora" in the "organism" field, as well as any accessions that have "Pandora" located anywhere in the metadata (such as in the "notes" or "Title" field). It will also include any accession that was historically named "Pandora" as well, I believe.  This is frustrating, as it will slow down your search by including accessions you don't care about. I haven't found a way around this yet. I've tried a few workarounds (e.g. "Pandora"[Organism:noexp]), but either they don't work or are too strict and result in too few hits. Later on in the curation steps, there is a step that automatically filtes out any accession whose organism name doesn't match to your list of target taxa. This means that you will probably have more accessions listed in your various intermediate files than you do in your final metadata file.
+
+If you've already set the values for "project_name", "max_acc_per_taxa", and "taxa_of_interest", you don't need to change the following command - just copy/paste/run as-is.
 
 ```R
 ncbi_data_fetch(project_name, max_acc_per_taxa, taxa_of_interest)
 ```
 
+<br>
+
+### 5) Curation of metadata
+
+Now that you have your metadata, it's time to do some basic curation. 
+
+NOTE:  Public metadata is highly inconsistent and often incomplete. Its quality depends entirely on the original submitter. aRborist attempts to standardize common fields and naming patterns, but you should expect irregularities like missing values, inconsistent strain naming, or unusual formatting. Review your curated data before downstream analyses and keep these limitations in mind.
+
+These are the curation steps that are peformed:
+
+1) Assign a universal strain name
+   Each accession receives a unified strain identifier (strain.standard) drawn from the following metadata fields, in order of priority:
+specimen_voucher → strain → isolate → Accession. If there is no voucher, strain, or isolate data recorded, the accession number itself is used.
+
+2) Standardize strain names
+   All spaces and special characters are stripped. The standardized strain name is called "strain.standard".
+   Example:  Both "ARSEF 1234" and "ARSEF-1234" become "ARSEF1234". 
+
+3) Flag accessions from type material. 
+   If an accession’s metadata indicates type material (e.g., holotype, isotype, ex-type, etc.), "TYPE" is appended to the standardized strain name.
+   Example: "ARSEF1234.TYPE" in the column strain.standard.type.
+
+4) Optional taxon filtering. 
+   By default, any accession whose "organism" name does not match your specified taxa_of_interest is removed. You can disable this by passing taxa_of_interest = NULL.
+
+
+Running the basic curation:
+
+Perform basic curation with taxon filtering (recommended):
+
+```R
+curate_metadata_basic(project_name)
+```
+
+Perform basic curation without taxon filtering:
+
+```R
+curate_metadata_basic(project_name, taxa_of_interest = NULL)
+```
+
+After this step completes, a new file will be created in your project directory:
+
+./metadata_files/all_accessions_pulled_metadata_<project_name>_curated_basic.csv
+
 <br> 
 
-# aRborist Phylogenetic tree pipeline
+### 6) Standardizing region names
+
+Now that your basic metadata has been standardized, the next step is to curate gene region information. The goal is to assign a consistent set of region identifiers for each accession, even when the original records use messy or compound descriptions.
+
+1) Before running this step, make sure you have run the basic curation step and have this file: ./metadata_files/all_accessions_pulled_metadata_<project_name>_curated_basic.csv
+   
+This step uses a user-editable "replacement patterns" file to detect and standardize region names (e.g., ITS, TEF, RPB2, LSU, SSU). You can add as many fragments as you want to catch multi-region descriptions. Each hit appends to the component list for that field. If you forget to include a pattern, aRborist will still flag common regions (ITS, LSU, SSU) automatically as a fallback. Any accessions with unmatched gene, product, AND acc_title categories will be logged in a separate file.
+
+1) The region replacement patterns is file located here: ./aRborist/example_data/region_replacement_patterns.csv
+
+Each "pattern" is a regular expression (regex) that will be searched (case-insensitive) in the "gene", "product", and "acc_title" metadata text fields.
+Each "standard" is the region name or label you want assigned when that pattern is found.
+
+You can add as many lines as you want, the file acts as a flexible compound detector.
+
+For example, if a gene description contains:
+
+> "internal transcribed spacer 1; 5.8S ribosomal RNA; large subunit ribosomal RNA"
+
+and your mapping file includes those three patterns, the resulting cell will record gene.components as:
+
+>ITS;5.8S;LSU
+
+aRborist will then perform the same pattern search for the "product" and "acc_title" categories for that accession. 
+
+Then, aRborist combines the component fields to assign a final "region.standard" column using the priority: gene.region.components > product.region.components > acc_title.region.components
+
+If you notice accessions in the new unmatched regions file (./metadata_files/unmatched_regions_Blackwellomyces_tree.csv), you can simply add the necessary pattern information to the replacement patterns file, save, and re-run the region curation step. It's not essential that every accession be assinged a region - you can stop whenever you feel you have captured all the useful information from the accessions you care about. 
+
+To run the region curation step:
+
+```R
+curate_metadata_regions(project_name)
+```
+
+<br>
+
+### End of basic aRborist pipeline
+
+At this point, you should have a massive metadata file with curated information. Hopefully, this is in a format that is useful to you! 
+
+I have several downstream pipelines that directly build off the output from these inital steps. These include:
+
+1) Phylogenetic tree pipeline
+   
+   Semi-automated pipeline to build phylogeneies from one or more genes.
+
+2) Host assessment pipeline
+
+   Automatically parses through massive amounts of public data to assign host percentage at different taxonomic levels.
+
+I create these pipelines primarily for myself, as needed for different projects, so I am always adding new offshoots of the aRborist pipeline, so this set of pipelines may expand in the future.
+
+<br>
+
+# aRborist Phylogenetic tree pipeline (includes fasta generation)
 
 ### set options for filtering
 
@@ -145,4 +250,3 @@ min_region_requirement <- length(regions_to_include)
 <br>
 
 # aRborist host assessment pipeline
-
