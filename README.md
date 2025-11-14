@@ -183,7 +183,7 @@ After this step completes, a new file will be created in your project directory:
 
 Now that your basic metadata has been standardized, the next step is to curate gene region information. The goal is to assign a consistent set of region identifiers for each accession, even when the original records use messy or compound descriptions.
 
-1) Before running this step, make sure you have run the basic curation step and have this file: ./metadata_files/all_accessions_pulled_metadata_<project_name>_curated_basic.csv
+1) Before running this step, make sure you have run the basic curation step and have this file: ./metadata_files/all_accessions_pulled_metadata_<project_name>_curated.csv
    
 This step uses a user-editable "replacement patterns" file to detect and standardize region names (e.g., ITS, TEF, RPB2, LSU, SSU). You can add as many fragments as you want to catch multi-region descriptions. Each hit appends to the component list for that field. If you forget to include a pattern, aRborist will still flag common regions (ITS, LSU, SSU) automatically as a fallback. Any accessions with unmatched gene, product, AND acc_title categories will be logged in a separate file.
 
@@ -230,23 +230,246 @@ I have several downstream pipelines that directly build off the output from thes
 
    Automatically parses through massive amounts of public data to assign host percentage at different taxonomic levels.
 
-I create these pipelines primarily for myself, as needed for different projects, so I am always adding new offshoots of the aRborist pipeline, so this set of pipelines may expand in the future.
+I create these pipelines primarily for myself, making them as needed for different projects. I am always adding new offshoots of the aRborist pipeline, so this set of pipelines may expand in the future.
 
+<br>
 <br>
 
 # aRborist Phylogenetic tree pipeline (includes fasta generation)
 
-### set options for filtering
+## Setup and software download
 
-`regions_to_include` Provide a list of loci of interest. Try to use the spelling/abbreviations commonly used on NCBI (e.g. if you search "TEF1" you'll get many more hits than if you searched "ef-1"). **should these match the output of the curation terms??**
+You'll need to have run the complete basic aRborist pipeline before attempting this pipeline. 
+
+You also need to download some external software before you proceed:  MAFFT (for alignment), TrimAl (for sequence trimming), and IQ-TREE (to actually create the phylogenetic trees). You will also need a software to view the phylogenies, such as [FigTree](https://github.com/rambaut/figtree/releases) or [TreeViewer](https://treeviewer.org/).
+
+If you have conda installed on your computer, you can easily install the software:
+
+> conda install -c bioconda trimal mafft iqtree
+
+Or, you can manually install at their respective websites:  [TrimAl](https://vicfero.git)  [MAFFT](https://mafft.cbrc.jp/alignment/software/source.html) [IQ-TREE](https://iqtree.github.io/)
+
+Take note of the full paths of your downloaded software. 
+
+Open your .Renviron file:
+
+```R
+usethis::edit_r_environ()
+```
+
+Edit this file to include the lines:
+
+```R
+>MAFFT_PATH=<path_to_mafft_install>
+# my install path was: /Users/scott/miniconda3/bin/mafft
+>TRIMAL_PATH=<path_to_trimal_install>
+# my install path was: /Users/scott/miniconda3/bin/trimal
+>IQTREE_PATH=<path_to_iqtree_install>
+# my install path was: /Users/scott/miniconda3/bin/iqtree
+```
+
+Save, and restart your R instance. 
+
+If you don't want to set the paths permanently in the .Renviron file, you can just set the paths each time you open R.
+
+To test if you have properly installed the software and R can find the binaries, run:
+
+```R
+Sys.getenv("MAFFT_PATH")
+Sys.getenv("TRIMAL_PATH")
+Sys.getenv("IQTREE_PATH")
+```
+
+If you see the full paths you just set, you are good to go. 
+
+<br>
+
+## 1) Filter metadata to desired regions
+
+Now that you have a curated metadata file for the project, the next step is to narrow it down to just the accessions that will be used to build a tree. In aRborist, we do this by telling the pipeline which marker(s) we want to use (e.g. ITS, TEF, RPB2), and the script will pull out only the accessions that match those markers. This produces a clean, region-specific dataset that the alignment/trim steps can use later.
+
+Remember - you can restart or jump between projects at any time by running the start_project command with the desired project name. If you just got done restarting your R instance to install the alignment and trimming software and you wanted to restart the test project, run these commands:
+
+```R
+# load up arborist packages
+arborist_repo <- normalizePath("~/github/aRborist")
+source(file.path(arborist_repo,"R", "arborist_helpers.R"))
+load_required_packages()
+
+# restart with the name of your project
+start_project(project_name = "Blackwellomyces_tree")
+```
+
+Then, to filter the metadata, 
+
+```R
+select_regions(project_name,
+               regions_to_include = c("ITS", "TEF"),
+               acc_to_exclude = character(0),
+               min_region_requirement = 2)
+```
+
+`regions_to_include` Provide a list of loci of interest. These terms will match the "standard" region names you specified in the region curation step. Otherwise, use standard NCBI region names such as ITS, TEF, RPB1, etc.
 
 `min_region_requirement` The number of user-specified loci an isolate must have in order to progress to be included in final downstream analyses. 
 
+What this step does:
+
+1) Filters the metadata to only consider accessions of regions that you are interested in.
+
+2) Filters the data to only include strain with X number of regions (you set the cutoff).
+
+If you set
+
+> min_region_requirement <- length(regions_to_include)
+
+then only strains that have ALL of the regions you asked for will be kept (strict mode).
+
+And if you set
+
+> min_region_requirement <- 1
+
+then any strain that has at least one of the regions will be kept.
+
+Important note about duplicates:  Public metadata is messy, and it’s common to have more than one accession for the same strain and the same region (for example, two ITS sequences submitted at different times). In this step, the script keeps only one accession per strain × region combination. 
+
+So if you are trying to include a particular accession, but you find that a duplicate entry or entires keeps being used in place of your desired accession, you can specify to remove those particular accessions with the "acc_to_exclude" option, like so:
+
+> acc_to_exclude = "PP46469,PP464690"
+
+<br>
+
+## 2) Create multifastas
+
+To create multifastas that contain the RAW sequence data from NCBI, run this command:
+
 ```R
-regions_to_include <- c("RPB2", "TEF", "ITS")
-min_region_requirement <- length(regions_to_include)
+create_multifastas(project_name, regions_to_include)
 ```
 
+You will see a multifasta appear for each of the regions you specified. For example: "./Blackwellomyces_tree/phylogenies/ITS.RPB2.TEF/prep/ITS/Blackwellomyces_tree.ITS.RPB2.TEF.ITS.raw.fasta"
+
+
+## 3) Align each region
+
+Once the raw multifasta files are created for each region, the next step is to align the sequences. This step is carried out separately for each region you specified. By default, aRborist uses the alignment software MAFFT (although I may add more alignment software options in the future).
+
+This step is run with:
+
+```R
+align_regions_mafft(project_name,
+                    regions_to_include,
+                    threads = max(1, parallel::detectCores() - 1),
+                    mafft_args = c("--auto", "--reorder"),
+                    force = TRUE)
+```
+
+Important parameters:
+
+`threads` : how many CPUs MAFFT will use. Defaults to all but one available core. 
+
+`extra_args` : allows you to pass different MAFFT parameters. For example:
+   - "auto" : automatically selects the best algorithm based on the number and length of sequences
+   - "--reorder" : lets MAFFT rearrange sequences internally to speed up the alignment
+   - check out the MAFFT manual for more options
+
+`force` : if TRUE, will overwrite preexisting alignment files in the project folder
+
+After this step, each region folder will contain the aligned multifastas (<region>.aligned.fasta) as well as the log file from the mafft run (<region>.mafft.log). The aligned files are ready for trimming. 
+
+Note:  Before proceeding further, I recommened checking the alignments with a alignment GUI just to make sure there isn't any rouge sequneces messing up the alignment. If someone uploaded a TEF sequence but labeled it as TEF, this could really mess up your alignment and any downstream processes. 
+
+<br>
+
+## 4) Trim each region
+
+After alignment, many columns in the alignment may contain mostly gaps or poorly aligned positions. We also need to ensure that all the sequences for a particular region are the same length. aRborist uses TrimAl to perform these steps. 
+
+The step is run with:
+
+```R
+trim_regions_trimal(project_name,
+                    regions_to_include,
+                    trimal_args = c("-automated1"))
+```
+
+Important parameters:
+
+`trimal_args` : allows you to pass different TrimAl parameters. For example:
+   - "-automated1" : trimAl automatically select thresholds for maximum allowed gap percentage per column, minimum overlap between sequences, and conservation scores.
+   - check the TrimAl manual for more options
+
+After this step, you will see a multifasta for the trimmed and aligned files (<region>.trimmed.fasta) as well as the log file from the mafft run (<region>.trimal.log).
+
+<br>
+
+## 5) Create single-gene trees
+
+Once you have trimmed alignments for each gene, the next step is to generate individual maximum-likelihood trees for each of your specified regions. If you are only interested in making a phylogeny from a single region, you can stop after this step as you will have your final tree (./single_gene_trees/<region>/<project>.<region>.modeltest.contree). 
+
+If you are going to make a multi-gene tree, this step is still essential to identify the best substitution model for region region, as well as helping you find problematic loci, identify outliers, and confirm that sequences are behaving as expected before concatenation. 
+
+This is how you create the single-gene trees with your trimmed alignments:
+
+```R
+iqtree_modelfinder_per_region(
+  project_name,
+  regions_to_include,
+  threads = 8, # or whatever you like
+  single_gene_bootstraps = 1000, # default bootstrap #          
+  iqtree_args = c("-m", "MFP+MERGE"),   # MFP+MERGE necessary for model ID; you can add more IQ-TREE options here if needed
+  force = TRUE
+)
+```
+
+<br>
+
+## 6) Create files necessary for multi-gene tree creation
+
+The next step is to create the necessary files for the multi-gene tree in IQ-TREE. This step will create a concatenated supermatrix from the trimmed and aligned sequences, as well as a nexus (.nex) file that will store the sequence length and best substition model for each region. 
+
+```R
+concatenate_and_write_partitions(project_name, regions_to_include)
+```
+
+<br>
+
+## 7)  Create multi-gene tree with partitioned analysis
+
+When creating phylogenies from multiple genes, I prefer to run a [partitioned analysis](https://iqtree.github.io/doc/Advanced-Tutorial) rather than use a single substituion model with the concatenated supermatrix. 
+
+Each gene evolves under its own substitution dynamics- this means that the rates of evolution, base composition, among-site rate heterogeneity, and patterns of selective constraint can differ widely across loci. If you force a single substitution model onto one giant concatenated alignment, you assume all sites evolve exactly the same, an assumption that is almost always unrealistic in multigene datasets. In most cases, I find that running a paritioned analysis results in a tree with a structure that makes more sense and has greatly improved bootstrap support values.
+
+This command will run a partitioned analysis in IQ-TREE:
+
+```R
+iqtree_multigene_partitioned(
+  project_name,
+  regions_to_include,
+  threads = 8,
+  multigene_bootstraps = 1000,
+  iqtree_args = c("-redo"),
+  force = TRUE
+)
+```
+
+After this step, the multi-gene phylogeny pipeline is complete. You can find your final consensus tree file here: (./multi_gene_trees/iqtree_<project_name>.<regions>.contree). 
+
+<br>
+
+## Software citations
+
+Make sure you cite all the software and methods used wrapped into this pipeline. 
+
+MAFFT:
+
+TrimAL:
+
+IQ-TREE:
+
+Partitioned analysis: 
+
+<br>
 <br>
 
 # aRborist host assessment pipeline

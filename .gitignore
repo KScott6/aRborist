@@ -1,0 +1,5 @@
+projects/
+metadata_files/
+multigene_tree/
+multifastas/
+*.log
