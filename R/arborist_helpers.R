@@ -623,6 +623,781 @@ curate_metadata_basic <- function(project_name,
   cat("Wrote basic curated metadata.\n")
 }
 
+
+
+
+# ============================================================
+# Host assessment functions
+# ============================================================
+
+
+initialize_host_standardized <- function(
+    project_name,
+    metadata_dir = "./metadata_files",
+    use_isolation_source = FALSE,
+    overwrite = FALSE
+) {
+  metadata_path <- file.path(
+    metadata_dir,
+    paste0("all_accessions_pulled_metadata_", project_name, "_curated.csv")
+  )
+  
+  if (!file.exists(metadata_path)) {
+    stop("Curated metadata file not found at: ", metadata_path)
+  }
+  
+  df <- read.csv(metadata_path, stringsAsFactors = FALSE)
+  
+  # If host.standardized already exists and we're not overwriting, just return
+  if ("host.standardized" %in% names(df) && !overwrite) {
+    message("host.standardized already exists and overwrite = FALSE; leaving as-is.")
+    return(invisible(metadata_path))
+  }
+  
+  # Ensure host + isolation_source columns exist
+  if (!"host" %in% names(df)) {
+    df$host <- NA_character_
+  }
+  if (!"isolation_source" %in% names(df)) {
+    df$isolation_source <- NA_character_
+  }
+  
+  # Start from host
+  host_std <- df$host
+  
+  # Optionally fill NAs/empties with isolation_source
+  if (use_isolation_source) {
+    host_is_na_or_empty <- is.na(host_std) | host_std == ""
+    iso_vals <- df$isolation_source
+    iso_vals[iso_vals == ""] <- NA
+    host_std[host_is_na_or_empty] <- iso_vals[host_is_na_or_empty]
+  }
+  
+  # Assign into dataframe
+  df$host.standardized <- host_std
+  
+  # Write back
+  write.csv(df, metadata_path, row.names = FALSE)
+  message("Initialized host.standardized in: ", metadata_path)
+  
+  invisible(metadata_path)
+}
+
+
+prepare_host_terms <- function(
+    project_name,
+    metadata_dir = "./metadata_files",
+    host_dir     = "./host_assessment",
+    use_isolation_source = FALSE
+) {
+  # ensure host_assessment folder exists
+  if (!dir.exists(host_dir)) dir.create(host_dir, recursive = TRUE)
+  
+  metadata_path <- file.path(
+    metadata_dir,
+    paste0("all_accessions_pulled_metadata_", project_name, "_curated.csv")
+  )
+  
+  if (!file.exists(metadata_path)) {
+    stop("Curated metadata file not found at: ", metadata_path)
+  }
+  
+  # Make sure host.standardized exists; do NOT overwrite if user already curated it
+  initialize_host_standardized(
+    project_name         = project_name,
+    metadata_dir         = metadata_dir,
+    use_isolation_source = use_isolation_source,
+    overwrite            = FALSE
+  )
+  
+  # Re-read after possible initialization
+  df <- read.csv(metadata_path, stringsAsFactors = FALSE)
+  
+  if (!"host.standardized" %in% names(df)) {
+    stop("host.standardized column is missing even after initialization; something went wrong.")
+  }
+  
+  host_terms <- df$host.standardized
+  
+  # Drop NA, empty strings, and literal "NA" (any capitalization, with/without spaces)
+  bad <- is.na(host_terms) |
+    host_terms == "" |
+    toupper(trimws(host_terms)) == "NA"
+  
+  host_terms <- unique(host_terms[!bad])
+  
+  out_path <- file.path(
+    host_dir,
+    paste0("host_terms_for_taxonomy_", project_name, ".csv")
+  )
+  
+  # Keep column name 'host' for compatibility with current run_host_taxonomy_lookup()
+  write.csv(
+    data.frame(host = host_terms, stringsAsFactors = FALSE),
+    out_path,
+    row.names = FALSE
+  )
+  
+  message("Wrote standardized host terms list to: ", out_path)
+  return(out_path)
+}
+
+
+
+run_host_taxonomy_lookup <- function(
+    project_name,
+    host_dir = "./host_assessment",
+    db = "ncbi",
+    sleep_sec = 0.1
+) {
+  if (!dir.exists(host_dir)) dir.create(host_dir, recursive = TRUE)
+  
+  terms_path <- file.path(
+    host_dir,
+    paste0("host_terms_for_taxonomy_", project_name, ".csv")
+  )
+  if (!file.exists(terms_path)) {
+    stop("Host terms file not found at: ", terms_path,
+         "\nRun prepare_host_terms() first.")
+  }
+  
+  # host_terms_for_taxonomy has a column named 'host'
+  host_terms <- read.csv(terms_path, stringsAsFactors = FALSE)$host
+  
+  # Sanity clean: drop NA / "" / literal "NA"
+  bad <- is.na(host_terms) |
+    host_terms == "" |
+    toupper(trimws(host_terms)) == "NA"
+  host_terms <- unique(host_terms[!bad])
+  
+  # Paths for taxonomy + failed mapping
+  taxonomy_path <- file.path(
+    host_dir,
+    paste0("host_taxonomy_", project_name, ".csv")
+  )
+  failed_path <- file.path(
+    host_dir,
+    paste0("host_failed_terms_", project_name, ".csv")
+  )
+  
+  # ---- helper to validate taxize result ----
+  is_valid_tax_table <- function(x) {
+    is.data.frame(x) &&
+      nrow(x) > 0 &&
+      all(c("name", "rank") %in% names(x))
+  }
+  
+  # Load existing taxonomy (if any), with legacy compatibility
+  if (file.exists(taxonomy_path)) {
+    host_taxonomy <- read.csv(taxonomy_path, stringsAsFactors = FALSE)
+    
+    # Legacy: older pipeline used "Host.standard"
+    if (!"Host.standardized" %in% names(host_taxonomy)) {
+      if ("Host.standard" %in% names(host_taxonomy)) {
+        message("Detected legacy taxonomy file. Renaming 'Host.standard' to 'Host.standardized'.")
+        names(host_taxonomy)[names(host_taxonomy) == "Host.standard"] <- "Host.standardized"
+      } else {
+        stop(
+          "Existing host_taxonomy file is missing 'Host.standardized' and 'Host.standard' columns: ",
+          taxonomy_path,
+          "\nIf this is an old file and you don't care about it, you can delete it and rerun."
+        )
+      }
+    }
+    
+    already_done <- unique(host_taxonomy$Host.standardized)
+  } else {
+    host_taxonomy <- data.frame(
+      Host.standardized = character(0),
+      Host.kingdom      = character(0),
+      Host.phylum       = character(0),
+      Host.class        = character(0),
+      Host.order        = character(0),
+      Host.family       = character(0),
+      Host.genus        = character(0),
+      Host.species      = character(0),
+      stringsAsFactors  = FALSE
+    )
+    already_done <- character(0)
+  }
+  
+  # Terms that still need to be queried
+  to_query <- setdiff(host_terms, already_done)
+  
+  if (length(to_query) == 0) {
+    message("All host terms in ", terms_path, " already have taxonomy.")
+    # still show unresolved failed terms if any
+    if (file.exists(failed_path)) {
+      failed_df <- read.csv(failed_path, stringsAsFactors = FALSE)
+      unresolved <- subset(failed_df,
+                           is.na(replacement_term) | replacement_term == "")
+      message("Unresolved failed terms in mapping file: ", nrow(unresolved))
+      if (nrow(unresolved) > 0) {
+        n_show <- min(10, nrow(unresolved))
+        message("Example unresolved terms (showing ", n_show, "):")
+        message("  - ", paste(unresolved$original_term[1:n_show],
+                              collapse = "\n  - "))
+      }
+    }
+    return(invisible(list(
+      taxonomy = host_taxonomy,
+      newly_failed = character(0)
+    )))
+  }
+  
+  message("Host taxonomy lookup starting for ", length(to_query),
+          " new standardized host terms.")
+  
+  # Containers for this run
+  successful_rows <- list()
+  failed_terms    <- character(0)
+  
+  # Ranks we care about
+  ranks_of_interest <- c("kingdom", "phylum", "class",
+                         "order", "family", "genus", "species")
+  
+  for (term in to_query) {
+    message("  Querying: ", term)
+    
+    # extra guard against "NA" / empty
+    if (is.na(term) || term == "" || toupper(trimws(term)) == "NA") {
+      message("    Skipping invalid term: ", term)
+      next
+    }
+    
+    res_list <- tryCatch({
+      taxize::classification(term, db = db)
+    }, error = function(e) {
+      NULL
+    })
+    
+    # If classification() itself failed or returned something weird
+    if (is.null(res_list) ||
+        length(res_list) == 0 ||
+        is.atomic(res_list)) {
+      message("    FAILED to retrieve taxonomy for: ", term, " (no usable result)")
+      failed_terms <- c(failed_terms, term)
+      Sys.sleep(sleep_sec)
+      next
+    }
+    
+    res <- res_list[[1]]
+    
+    # If the first element is not a proper tax table, treat as failure
+    if (!is_valid_tax_table(res)) {
+      message("    FAILED to retrieve taxonomy for: ", term, " (invalid tax table)")
+      failed_terms <- c(failed_terms, term)
+      Sys.sleep(sleep_sec)
+      next
+    }
+    
+    # wide format: one row, columns Host.kingdom, Host.phylum, ...
+    this_row <- setNames(
+      as.list(rep(NA_character_, length(ranks_of_interest))),
+      paste0("Host.", ranks_of_interest)
+    )
+    
+    for (rk in ranks_of_interest) {
+      hit <- res$name[res$rank == rk]
+      if (length(hit) > 0) {
+        this_row[[paste0("Host.", rk)]] <- hit[1]
+      }
+    }
+    
+    df_row <- data.frame(
+      Host.standardized = term,
+      as.data.frame(this_row, stringsAsFactors = FALSE),
+      stringsAsFactors = FALSE
+    )
+    
+    successful_rows[[length(successful_rows) + 1L]] <- df_row
+    message("    OK")
+    
+    Sys.sleep(sleep_sec)
+  }
+  
+  # Bind new successes and append to existing taxonomy
+  if (length(successful_rows) > 0) {
+    new_tax_rows <- do.call(rbind, successful_rows)
+    
+    host_taxonomy <- dplyr::bind_rows(host_taxonomy, new_tax_rows) %>%
+      dplyr::distinct(Host.standardized, .keep_all = TRUE)
+  }
+  
+  # Write updated taxonomy file
+  write.csv(host_taxonomy, taxonomy_path, row.names = FALSE)
+  message("\nHost taxonomy file written to: ", taxonomy_path)
+  
+  # Update failed mapping file
+  if (file.exists(failed_path)) {
+    failed_df <- read.csv(failed_path, stringsAsFactors = FALSE)
+  } else {
+    failed_df <- data.frame(
+      original_term    = character(0),
+      replacement_term = character(0),
+      stringsAsFactors = FALSE
+    )
+  }
+  
+  # Add new failed terms if they are not already present
+  for (ft in unique(failed_terms)) {
+    if (!ft %in% failed_df$original_term) {
+      failed_df <- rbind(
+        failed_df,
+        data.frame(
+          original_term    = ft,
+          replacement_term = NA_character_,
+          stringsAsFactors = FALSE
+        )
+      )
+    }
+  }
+  
+  # Write failed terms mapping
+  write.csv(failed_df, failed_path, row.names = FALSE)
+  message("Failed terms mapping file written to: ", failed_path)
+  
+  # Console summary
+  newly_success <- if (length(successful_rows) > 0)
+    nrow(do.call(rbind, successful_rows)) else 0
+  
+  message("\nHost taxonomy lookup completed.")
+  message("  Newly successful terms this run: ", newly_success)
+  message("  Total successful terms (cumulative): ", nrow(host_taxonomy))
+  message("  Newly failed terms this run: ", length(unique(failed_terms)))
+  message("  Total failed terms in mapping file: ", nrow(failed_df))
+  
+  unresolved <- subset(failed_df,
+                       is.na(replacement_term) | replacement_term == "")
+  if (nrow(unresolved) > 0) {
+    n_show <- min(10, nrow(unresolved))
+    message("  Unresolved failed terms needing manual curation (showing ",
+            n_show, "):")
+    message("    - ",
+            paste(unresolved$original_term[1:n_show], collapse = "\n    - "))
+  } else {
+    message("  No unresolved failed terms; all failures have a replacement_term assigned.")
+  }
+  
+  invisible(list(
+    taxonomy     = host_taxonomy,
+    newly_failed = unique(failed_terms),
+    failed_table = failed_df
+  ))
+}
+
+
+apply_host_standardization_mapping <- function(
+    project_name,
+    metadata_dir = "./metadata_files",
+    host_dir     = "./host_assessment"
+) {
+  metadata_path <- file.path(
+    metadata_dir,
+    paste0("all_accessions_pulled_metadata_", project_name, "_curated.csv")
+  )
+  if (!file.exists(metadata_path)) {
+    stop("Curated metadata file not found at: ", metadata_path)
+  }
+  
+  failed_path <- file.path(
+    host_dir,
+    paste0("host_failed_terms_", project_name, ".csv")
+  )
+  if (!file.exists(failed_path)) {
+    stop("Failed terms mapping file not found at: ", failed_path,
+         "\nRun run_host_taxonomy_lookup() at least once first.")
+  }
+  
+  df_meta   <- read.csv(metadata_path, stringsAsFactors = FALSE)
+  failed_df <- read.csv(failed_path,  stringsAsFactors = FALSE)
+  
+  if (!"host.standardized" %in% names(df_meta)) {
+    stop("Metadata is missing 'host.standardized'. ",
+         "Run initialize_host_standardized() / prepare_host_terms() first.")
+  }
+  
+  if (!all(c("original_term", "replacement_term") %in% names(failed_df))) {
+    stop("host_failed_terms file must have 'original_term' and 'replacement_term' columns.")
+  }
+  
+  n_changed_to_na  <- 0L
+  n_changed_to_new <- 0L
+  
+  for (i in seq_len(nrow(failed_df))) {
+    orig <- failed_df$original_term[i]
+    repl <- failed_df$replacement_term[i]
+    
+    idx <- which(df_meta$host.standardized == orig)
+    
+    if (length(idx) == 0) next
+    
+    # Interpret replacement_term:
+    # - NA / "" / "NA" (any capitalization) => drop (set to NA)
+    if (is.na(repl) || repl == "" || toupper(trimws(repl)) == "NA") {
+      df_meta$host.standardized[idx] <- NA_character_
+      n_changed_to_na <- n_changed_to_na + length(idx)
+    } else {
+      df_meta$host.standardized[idx] <- repl
+      n_changed_to_new <- n_changed_to_new + length(idx)
+    }
+  }
+  
+  write.csv(df_meta, metadata_path, row.names = FALSE)
+  
+  message("Applied host standardization mapping to metadata:")
+  message("  Rows set to NA (ignored hosts): ", n_changed_to_na)
+  message("  Rows set to new standardized terms: ", n_changed_to_new)
+  message("Updated metadata written to: ", metadata_path)
+  
+  invisible(list(
+    changed_to_na  = n_changed_to_na,
+    changed_to_new = n_changed_to_new
+  ))
+}
+
+
+merge_host_taxonomy_into_metadata <- function(
+    project_name,
+    host_dir = "./host_assessment"
+) {
+  # 1) Load curated metadata
+  meta_path <- paste0(
+    "./metadata_files/all_accessions_pulled_metadata_",
+    project_name,
+    "_curated.csv"
+  )
+  if (!file.exists(meta_path)) {
+    stop("Curated metadata file not found at: ", meta_path,
+         "\nRun curate_metadata_basic() first.")
+  }
+  
+  meta <- read.csv(meta_path, stringsAsFactors = FALSE)
+  
+  # 2) Ensure host.standardized exists (default = original 'host')
+  if (!"host.standardized" %in% names(meta)) {
+    if ("host" %in% names(meta)) {
+      meta$host.standardized <- meta$host
+    } else {
+      stop("Metadata does not contain a 'host' column to initialize 'host.standardized'.")
+    }
+  }
+  
+  # 3) Load host taxonomy table
+  host_tax_path <- file.path(host_dir, paste0("host_taxonomy_", project_name, ".csv"))
+  if (!file.exists(host_tax_path)) {
+    stop("Host taxonomy file not found at: ", host_tax_path,
+         "\nRun run_host_taxonomy_lookup(project_name) first.")
+  }
+  
+  host_tax <- read.csv(host_tax_path, stringsAsFactors = FALSE)
+  
+  if (!"Host.standardized" %in% names(host_tax)) {
+    stop(
+      "Host taxonomy file does not contain 'Host.standardized' column: ",
+      host_tax_path
+    )
+  }
+  
+  # 3b) Deduplicate host_taxonomy by Host.standardized (keep first)
+  host_tax <- host_tax %>%
+    dplyr::filter(!is.na(Host.standardized) & Host.standardized != "") %>%
+    dplyr::distinct(Host.standardized, .keep_all = TRUE)
+  
+  # 4) DROP any existing Host.* columns from metadata to avoid .x/.y/.x.x zoo
+  existing_host_cols <- grep("^Host\\.", names(meta), value = TRUE)
+  if (length(existing_host_cols) > 0) {
+    message("Removing existing Host.* columns from metadata before merge: ",
+            paste(existing_host_cols, collapse = ", "))
+    meta <- meta[, setdiff(names(meta), existing_host_cols), drop = FALSE]
+  }
+  
+  # 5) Left-join taxonomy on host.standardized
+  meta_merged <- meta %>%
+    dplyr::left_join(
+      host_tax,
+      by = c("host.standardized" = "Host.standardized")
+    )
+  
+  # 6) Ensure Strain.taxonomy exists, populated from GBSeq_taxonomy if available
+  if (!"Strain.taxonomy" %in% names(meta_merged)) {
+    if ("GBSeq_taxonomy" %in% names(meta_merged)) {
+      meta_merged$Strain.taxonomy <- meta_merged$GBSeq_taxonomy
+      message("Created 'Strain.taxonomy' column from 'GBSeq_taxonomy'.")
+    } else {
+      meta_merged$Strain.taxonomy <- NA_character_
+      warning("Neither 'Strain.taxonomy' nor 'GBSeq_taxonomy' found; ",
+              "created empty 'Strain.taxonomy' column.")
+    }
+  }
+  
+  # 7) Write updated metadata (overwriting previous curated file)
+  write.csv(
+    meta_merged,
+    meta_path,
+    row.names = FALSE
+  )
+  
+  message("Merged host taxonomy into metadata and wrote updated file:\n  ", meta_path)
+  
+  # 8) Summary
+  n_total <- nrow(meta_merged)
+  
+  n_host_raw <- if ("host" %in% names(meta_merged)) {
+    sum(!is.na(meta_merged$host) & meta_merged$host != "")
+  } else 0L
+  
+  n_host_std <- sum(!is.na(meta_merged$host.standardized) & meta_merged$host.standardized != "")
+  
+  host_phylum_col <- "Host.phylum"
+  if (host_phylum_col %in% names(meta_merged)) {
+    n_host_phylum <- sum(!is.na(meta_merged[[host_phylum_col]]) &
+                           meta_merged[[host_phylum_col]] != "")
+    n_both_std_phylum <- sum(
+      !is.na(meta_merged$host.standardized) & meta_merged$host.standardized != "" &
+        !is.na(meta_merged[[host_phylum_col]]) & meta_merged[[host_phylum_col]] != ""
+    )
+  } else {
+    n_host_phylum <- NA_integer_
+    n_both_std_phylum <- NA_integer_
+  }
+  
+  message("Host taxonomy summary:")
+  message("  Total accessions: ", n_total)
+  message("  Accessions with non-empty raw 'host': ", n_host_raw)
+  message("  Accessions with non-empty 'host.standardized': ", n_host_std)
+  if (!is.na(n_host_phylum)) {
+    message("  Accessions with annotated Host.phylum: ", n_host_phylum)
+    message("  Accessions with BOTH non-empty host.standardized and Host.phylum: ",
+            n_both_std_phylum)
+  }
+  
+  invisible(meta_merged)
+}
+
+
+summarize_host_usage <- function(
+    project_name,
+    host_rank = "phylum",
+    keep_NAs  = FALSE,
+    host_dir  = "./host_assessment"
+) {
+  if (!dir.exists(host_dir)) dir.create(host_dir, recursive = TRUE)
+  
+  # 1) Load curated + host-merged metadata
+  meta_path <- paste0(
+    "./metadata_files/all_accessions_pulled_metadata_",
+    project_name,
+    "_curated.csv"
+  )
+  if (!file.exists(meta_path)) {
+    stop("Curated metadata file not found at: ", meta_path,
+         "\nRun curate_metadata_basic() and merge_host_taxonomy_into_metadata() first.")
+  }
+  
+  meta <- read.csv(meta_path, stringsAsFactors = FALSE)
+  
+  host_col <- paste0("Host.", host_rank)
+  if (!host_col %in% names(meta)) {
+    stop("Column '", host_col, "' not found in metadata.\n",
+         "Available Host.* columns: ",
+         paste(grep("^Host\\.", names(meta), value = TRUE), collapse = ", "))
+  }
+  
+  # 2) Build a working data frame: organism + host_rank
+  df <- meta %>%
+    dplyr::select(organism, !!host_col) %>%
+    dplyr::mutate(
+      organism = as.character(organism),
+      host_val = .data[[host_col]]
+    )
+  
+  # Optional: drop metagenome rows
+  df <- df %>%
+    dplyr::filter(!grepl("metagenome", organism, ignore.case = TRUE))
+  
+  # Optional: handle NA vs NoData behavior
+  if (keep_NAs) {
+    # Keep NA as a category "NoData"
+    df <- df %>%
+      dplyr::mutate(
+        host_val = dplyr::if_else(
+          is.na(host_val) | host_val == "",
+          "NoData",
+          host_val
+        )
+      )
+  } else {
+    # Drop rows with no usable host annotation
+    df <- df %>%
+      dplyr::filter(!is.na(host_val) & host_val != "")
+  }
+  
+  # 3) If nothing left, bail gracefully
+  if (nrow(df) == 0) {
+    warning("No rows with usable host annotations after filtering (keep_NAs = ",
+            keep_NAs, "). Nothing to summarize.")
+    return(invisible(NULL))
+  }
+  
+  # 4) Count accessions by organism × host category
+  counts_long <- df %>%
+    dplyr::filter(!grepl("\\ssp\\.", organism)) %>%  # remove " sp." species
+    dplyr::count(organism, host_val, name = "accession_count")
+  
+  if (nrow(counts_long) == 0) {
+    warning("After filtering out 'sp.' taxa, no data remain for host usage summary.")
+    return(invisible(NULL))
+  }
+  
+  # 5) Wide format: one row per organism, columns per host_val (counts)
+  counts_wide <- counts_long %>%
+    tidyr::pivot_wider(
+      names_from  = host_val,
+      values_from = accession_count,
+      values_fill = list(accession_count = 0)
+    )
+  
+  # 6) Calculate accession.count and percentages for each host category
+  host_cols <- setdiff(names(counts_wide), "organism")
+  
+  counts_wide <- counts_wide %>%
+    dplyr::mutate(
+      accession.count = rowSums(dplyr::across(dplyr::all_of(host_cols)))
+    )
+  
+  # Avoid division by zero; if accession.count == 0, set % to 0
+  result <- counts_wide %>%
+    dplyr::mutate(
+      dplyr::across(
+        dplyr::all_of(host_cols),
+        ~ ifelse(accession.count > 0, .x / accession.count * 100, 0),
+        .names = "{.col}_percentage"
+      )
+    )
+  
+  # Precompute the percentage column names and capture them in locals
+  perc_cols       <- paste0(host_cols, "_percentage")
+  host_cols_local <- host_cols
+  perc_cols_local <- perc_cols
+  
+  # 7) Add "top_host_categories" + "host_profile"
+  result <- result %>%
+    dplyr::rowwise() %>%
+    dplyr::mutate(
+      top_host_categories = {
+        vals <- c_across(dplyr::all_of(host_cols_local))
+        if (all(is.na(vals)) || all(vals == 0, na.rm = TRUE)) {
+          NA_character_
+        } else {
+          max_val <- max(vals, na.rm = TRUE)
+          paste0(host_cols_local[!is.na(vals) & vals == max_val], collapse = ";")
+        }
+      },
+      host_profile = {
+        percs <- c_across(dplyr::all_of(perc_cols_local))
+        names(percs) <- host_cols_local
+        
+        nz <- percs[!is.na(percs) & percs > 0]
+        
+        if (length(nz) == 0) {
+          NA_character_
+        } else {
+          ord <- order(nz, decreasing = TRUE)
+          paste(
+            paste0(
+              names(nz)[ord],
+              "(",
+              round(nz[ord], 1),
+              "%)"
+            ),
+            collapse = ";"
+          )
+        }
+      }
+    ) %>%
+    dplyr::ungroup()
+  
+  # 8) Write out summary
+  out_path <- file.path(
+    host_dir,
+    paste0("host_usage_by_", host_rank, "_", project_name, ".csv")
+  )
+  write.csv(result, out_path, row.names = FALSE)
+  
+  message("Host usage summary written to: ", out_path)
+  message("  Rows (species): ", nrow(result))
+  message("  Host categories (", host_rank, "): ", length(host_cols),
+          if (keep_NAs && "NoData" %in% host_cols) " (includes 'NoData')" else "")
+  
+  invisible(result)
+}
+
+
+##############################
+# Host assessment wrappers
+##############################
+
+# first pass only
+run_host_assessment_initial_pass <- function(project_name,
+                                             use_isolation_source = TRUE,
+                                             overwrite_host_standardized = TRUE) {
+  # 1) Initialize or refresh host.standardized in the curated metadata
+  initialize_host_standardized(
+    project_name          = project_name,
+    use_isolation_source  = use_isolation_source,
+    overwrite             = overwrite_host_standardized
+  )
+  # 2) Build the unique host term list from host.standardized
+  prepare_host_terms(project_name)
+  # 3) Run the first taxonomy lookup pass
+  run_host_taxonomy_lookup(project_name)
+  invisible(TRUE)
+}
+
+# Host assessment refinement wrapper
+run_host_assessment_refinement_pass <- function(project_name) {
+  message("Applying updated host standardization mapping...")
+  apply_host_standardization_mapping(project_name)
+  
+  message("Rebuilding unique host term list from host.standardized...")
+  prepare_host_terms(project_name)
+  
+  message("Running host taxonomy lookup for newly standardized terms...")
+  run_host_taxonomy_lookup(project_name)
+  
+  message("Refinement pass complete.")
+  invisible(TRUE)
+}
+
+# final data merge and summary creation
+run_host_assessment_summary <- function(project_name,
+                                        host_rank = "phylum",
+                                        keep_NAs = FALSE) {
+  message("Merging host taxonomy into curated metadata...")
+  merge_host_taxonomy_into_metadata(project_name)
+  
+  message(sprintf(
+    "Summarizing host usage at rank '%s' (keep_NAs = %s)...",
+    host_rank, keep_NAs
+  ))
+  summary_df <- summarize_host_usage(
+    project_name,
+    host_rank = host_rank,
+    keep_NAs  = keep_NAs
+  )
+  
+  message("Host assessment summary complete.")
+  invisible(summary_df)
+}
+
+
+
+
+# ============================================================
+# Phylogeny creation functions
+# ============================================================
+
 curate_metadata_regions <- function(project_name,
                                     mapping_file = NULL) {
 
@@ -1672,11 +2447,7 @@ iqtree_multigene_partitioned <- function(
 
 
 # ============================================================
-
-
-
-# ============================================================
-# arborist wrappers
+# arborist extra wrappers
 # ============================================================
 
 # aquiring accessions + data from NCBI
@@ -1716,4 +2487,4 @@ data_curate <- function(project_name, taxa_of_interest = NULL, acc_to_exclude = 
   create_multifastas(project_name)
 }
 
-# make wrapper for the mess that is the multi-gene pipeline
+

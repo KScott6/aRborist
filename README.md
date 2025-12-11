@@ -472,4 +472,94 @@ Partitioned analysis:
 <br>
 <br>
 
-# aRborist host assessment pipeline
+# aRborist Host Assessment Pipeline
+
+Taxonomic curation and summary of host associations for each species included in your metadata.
+
+This host assessment pipeline takes your curated metadata from the basic arborist pipeline, cleans and standardizes it, looks up the host taxonomy via NCBI, and provides a helpful summary. This pipeline is optional and is fully independent of the phylogenetic pipeline. You can run either or both of these pipelines, in any order, after completing the basic metadata curation step of the basic arborist pipeline. 
+
+All the output from this pipeline will be stored inside your project folder in a folder called "host_assessment".
+
+<br> 
+
+## 1) Initial host term extraction and taxonomy lookup
+
+This step will create a new column in your metadata (host.standardized) and use the NCBI taxonomy database to look up the full taxonomy for each unique term.
+
+At the end of the lookup process, you will be told how many host names failed the search. If by some miracle you have zero failed names, or if you don't care about using as much of the metadata as possible, you may proceed directly to step 3. 
+
+```R
+run_host_assessment_initial_pass(
+  project_name,
+  use_isolation_source = FALSE, 
+  overwrite_host_standardized = TRUE
+)
+```
+
+Explanation of options:
+
+`use_isolation_source` : If the "host" metadata field is empty for an accession, will instead use the entry for "isolation_source".
+
+Sometimes, when looking at metadata, it's really obvious that someone put down host infomation in the "isolation_source" category rather than the correct "host" category. I made this option in case I wanted to wring every bit of somewhat applicable information out of the metadata. Turning this option on will drastically increase the number of terms you need to search and edit, plus, chances are some of the isolation_source data truly is inappropriate to be considered as host data. Overall, I would recommend against using this option. 
+
+`overwrite_host_standardized` : if TRUE, will overwrite the host_standarized column in your metadata file. Turn this on if you want to start the host assessment pipeline from scratch and need to re-do this step.
+
+<br> 
+
+## 2) Curation and re-attempt to lookup host terms
+
+You probably had at least a few terms fail the NCBI taxonomy lookup. Metadata will often contain messy, misspelled, or ambiguous terms - this does not play well with automated searching. *If* you want to rescue as much metadata as possible, you'll need to do some manual editing.
+
+The previous step has created a file listing all the failed terms:  ./host_assessment/failed_host_terms_<project>.csv
+
+It contains two columns: "original_term" and "replacement_term". Open the file and change the values in the "replacement_term" column to a more approprate term. If there is a term you know you don't care about or want to skip (e.g. "soil", "culture from", nonsense) leave it as "NA". 
+
+Some examples:
+
+* "on insect cocoon buried in soil" ->  "Insecta"
+
+* "Crinipellis pernikiosa" -> "Crinipellis perniciosa"
+
+* "lepidopteran larva" -> "Lepidoptera"
+
+
+Some notes:  I recommend being as conservative as possible when changing terms. Double check commonly mispelled names, or if an organism has more than one name. Also, if a name is not in the NCBI taxonomy database, it will not return the taxonomy (I have run into this problem a lot with esoteric plant taxa).
+
+
+Once you have made the necessary edits, save the file. Then, run the following to re-attempt the taxonomy lookup with just the failed terms:
+
+```R
+run_host_assessment_refinement_pass(project_name)
+```
+
+You can re-run the refinement step as many times as needed. Once you feel good about the state of your data, move onto the next step.
+
+<br>
+
+## 3) Summarize host data
+
+Now it's time to add your host taxonomy data back to your master datasheet (./metadata_files/all_accessions_pulled_metadata_<project_name>_curated.csv) and summarize the info so it's in a useable form. 
+
+```R
+run_host_assessment_summary(
+  project_name,
+  host_rank = "phylum",   # or "order", "class", "family", "genus", etc.
+  keep_NAs  = FALSE       # include/exclude NA hosts from percentages
+)
+```
+
+Explanation of options: 
+
+`host_rank` :  specify the taxonomy rank you want to investigate. 
+
+Many accessions only have high-level host information available, so it is best to begin with broader ranks (phylum, order) and only move to finer levels if the dataset supports it.
+
+`keep_NAs` : control how missing or unusable host information affects percentage calculations.
+
+If TRUE, aRborist will summarize host usage only among accessions with known host information. If FALSE, aRborist will incorporate NAs into the calculations; percentages become more conservative and may be strongly diluted by missing data. Not including the NAs will better reflect the overall data completeness, but will probably weaken the ecological signal because unknown hosts will probably dominate the totals.
+
+<br>
+
+With this step complete, the host assessment pipeline is done. You will have a final report of the host assessment of your metadata here: ./host_assessment/host_usage_by_<taxon_level>_<project_name>.csv
+
+This file has one row for each species in your dataset, with the host breakdown at the specified taxon level. The "top_host_category" column reports the host taxa with the highest percetage per target speices. The "host_profile" column summarizes the host breakdown. 

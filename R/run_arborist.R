@@ -1,4 +1,6 @@
+############################
 # Base aRborist pipeline - collect and curate NCBI nucleotide sequences and metadata
+############################
 
 ## LOAD HELPER FUNCTIONS
 arborist_repo <- normalizePath("~/github/aRborist")
@@ -6,10 +8,10 @@ source(file.path(arborist_repo,"R", "arborist_helpers.R"))
 
 ## USER OPTIONS (edit these for your project needs)
 base_dir <- path.expand("~")
-project_name <- "Blackwellomyces_tree"
-taxa_of_interest <- c("Blackwellomyces", "Flavocillium")
+project_name <- "Cordyceps_host_test"
+taxa_of_interest <- c("Cordyceps")
 regions_to_include <- c("RPB2", "TEF", "ITS")
-max_acc_per_taxa <- "max"
+max_acc_per_taxa <- "10000"
 my_lab_sequences <- ""  # path to input file, put "" if none
 ncbi_api_key <- Sys.getenv("NCBI_API_KEY")  # or just set once in ~/.Renviron
 acc_to_exclude <- "" # include any accessions you know you don't want to include
@@ -35,7 +37,33 @@ curate_metadata_basic(project_name)
 curate_metadata_regions(project_name)
 
 
-# Phlyogeny pipeline
+############################
+# Host Assessment Pipeline
+############################
+
+# first pass at obtaining host data for your accessions
+run_host_assessment_initial_pass(
+  project_name,
+  use_isolation_source = TRUE,
+  overwrite_host_standardized = TRUE
+)
+
+# MANUAL EDIT STEP - don't forget this!
+
+# followup attempts (run as many times as you need)
+run_host_assessment_refinement_pass(project_name)
+
+# host summary step
+run_host_assessment_summary(
+  project_name,
+  host_rank = "phylum",
+  keep_NAs = FALSE
+)
+
+
+############################
+# Phylogeny pipeline
+############################
 
 ## Filter metadata to desired regions
 select_regions(project_name, regions_to_include, acc_to_exclude, min_region_requirement)
