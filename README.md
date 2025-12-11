@@ -177,43 +177,8 @@ After this step completes, a new file will be created in your project directory:
 
 ./metadata_files/all_accessions_pulled_metadata_<project_name>_curated_basic.csv
 
-<br> 
 
-### 6) Standardizing region names
-
-Now that your basic metadata has been standardized, the next step is to curate gene region information. The goal is to assign a consistent set of region identifiers for each accession, even when the original records use messy or compound descriptions.
-
-1) Before running this step, make sure you have run the basic curation step and have this file: ./metadata_files/all_accessions_pulled_metadata_<project_name>_curated.csv
-   
-This step uses a user-editable "replacement patterns" file to detect and standardize region names (e.g., ITS, TEF, RPB2, LSU, SSU). You can add as many fragments as you want to catch multi-region descriptions. Each hit appends to the component list for that field. If you forget to include a pattern, aRborist will still flag common regions (ITS, LSU, SSU) automatically as a fallback. Any accessions with unmatched gene, product, AND acc_title categories will be logged in a separate file.
-
-1) The region replacement patterns is file located here: ./aRborist/example_data/region_replacement_patterns.csv
-
-Each "pattern" is a regular expression (regex) that will be searched (case-insensitive) in the "gene", "product", and "acc_title" metadata text fields.
-Each "standard" is the region name or label you want assigned when that pattern is found.
-
-You can add as many lines as you want, the file acts as a flexible compound detector.
-
-For example, if a gene description contains:
-
-> "internal transcribed spacer 1; 5.8S ribosomal RNA; large subunit ribosomal RNA"
-
-and your mapping file includes those three patterns, the resulting cell will record gene.components as:
-
->ITS;5.8S;LSU
-
-aRborist will then perform the same pattern search for the "product" and "acc_title" categories for that accession. 
-
-Then, aRborist combines the component fields to assign a final "region.standard" column using the priority: gene.region.components > product.region.components > acc_title.region.components
-
-If you notice accessions in the new unmatched regions file (./metadata_files/unmatched_regions_Blackwellomyces_tree.csv), you can simply add the necessary pattern information to the replacement patterns file, save, and re-run the region curation step. It's not essential that every accession be assinged a region - you can stop whenever you feel you have captured all the useful information from the accessions you care about. 
-
-To run the region curation step:
-
-```R
-curate_metadata_regions(project_name)
-```
-
+<br>
 <br>
 
 ### End of basic aRborist pipeline
@@ -228,7 +193,7 @@ I have several downstream pipelines that directly build off the output from thes
 
 2) Host assessment pipeline
 
-   Automatically parses through massive amounts of public data to assign host percentage at different taxonomic levels.
+   Semi-automatically parses through massive amounts of public data to assign host percentage at different taxonomic levels.
 
 I create these pipelines primarily for myself, making them as needed for different projects. I am always adding new offshoots of the aRborist pipeline, so this set of pipelines may expand in the future.
 
@@ -239,9 +204,9 @@ I create these pipelines primarily for myself, making them as needed for differe
 
 ## Setup and software download
 
-You'll need to have run the complete basic aRborist pipeline before attempting this pipeline. 
+This pipeline is optional and is fully independent of the host assessment pipeline. You can run either or both of these pipelines, in any order, after completing the basic metadata curation step of the basic arborist pipeline.
 
-You also need to download some external software before you proceed:  MAFFT (for alignment), TrimAl (for sequence trimming), and IQ-TREE (to actually create the phylogenetic trees). You will also need a software to view the phylogenies, such as [FigTree](https://github.com/rambaut/figtree/releases) or [TreeViewer](https://treeviewer.org/).
+You will need to download some external software before you proceed:  MAFFT (for alignment), TrimAl (for sequence trimming), and IQ-TREE (to actually create the phylogenetic trees). You will also need a software to view the phylogenies, such as [FigTree](https://github.com/rambaut/figtree/releases) or [TreeViewer](https://treeviewer.org/).
 
 If you have conda installed on your computer, you can easily install the software:
 
@@ -284,9 +249,45 @@ If you see the full paths you just set, you are good to go.
 
 <br>
 
-## 1) Filter metadata to desired regions
+## 1) Standardizing region names
 
-Now that you have a curated metadata file for the project, the next step is to narrow it down to just the accessions that will be used to build a tree. In aRborist, we do this by telling the pipeline which marker(s) we want to use (e.g. ITS, TEF, RPB2), and the script will pull out only the accessions that match those markers. This produces a clean, region-specific dataset that the alignment/trim steps can use later.
+You need to further curate your metadata so that the gene region information is useable. The goal is to assign a consistent set of region identifiers for each accession, even when the original records use messy or compound descriptions.
+
+a) Before running this step, make sure you have run the basic curation step and have this file: ./metadata_files/all_accessions_pulled_metadata_<project_name>_curated.csv
+   
+This step uses a user-editable "replacement patterns" file to detect and standardize region names (e.g., ITS, TEF, RPB2, LSU, SSU). You can add as many fragments as you want to catch multi-region descriptions. Each hit appends to the component list for that field. If you forget to include a pattern, aRborist will still flag common regions (ITS, LSU, SSU) automatically as a fallback. Any accessions with unmatched gene, product, AND acc_title categories will be logged in a separate file.
+
+b) The region replacement patterns is file located here: ./aRborist/example_data/region_replacement_patterns.csv
+
+Each "pattern" is a regular expression (regex) that will be searched (case-insensitive) in the "gene", "product", and "acc_title" metadata text fields.
+Each "standard" is the region name or label you want assigned when that pattern is found.
+
+You can add as many lines as you want, the file acts as a flexible compound detector.
+
+For example, if a gene description contains:
+
+> "internal transcribed spacer 1; 5.8S ribosomal RNA; large subunit ribosomal RNA"
+
+and your mapping file includes those three patterns, the resulting cell will record gene.components as:
+
+>ITS;5.8S;LSU
+
+aRborist will then perform the same pattern search for the "product" and "acc_title" categories for that accession. 
+
+Then, aRborist combines the component fields to assign a final "region.standard" column using the priority: gene.region.components > product.region.components > acc_title.region.components
+
+If you notice accessions in the new unmatched regions file (./metadata_files/unmatched_regions_Blackwellomyces_tree.csv), you can simply add the necessary pattern information to the replacement patterns file, save, and re-run the region curation step. It's not essential that every accession be assinged a region - you can stop whenever you feel you have captured all the useful information from the accessions you care about. 
+
+To run the region curation step:
+
+```R
+curate_metadata_regions(project_name)
+```
+ <br> 
+
+## 2) Filter metadata to desired regions
+
+Now that you have a more curated metadata file for the project, the next step is to narrow it down to just the accessions that will be used to build a tree. In aRborist, we do this by telling the pipeline which marker(s) we want to use (e.g. ITS, TEF, RPB2), and the script will pull out only the accessions that match those markers. This produces a clean, region-specific dataset that the alignment/trim steps can use later.
 
 Remember - you can restart or jump between projects at any time by running the start_project command with the desired project name. If you just got done restarting your R instance to install the alignment and trimming software and you wanted to restart the test project, run these commands:
 
@@ -339,7 +340,7 @@ So if you are trying to include a particular accession, but you find that a dupl
 
 <br>
 
-## 2) Create multifastas
+## 3) Create multifastas
 
 To create multifastas that contain the RAW sequence data from NCBI, run this command:
 
@@ -350,7 +351,7 @@ create_multifastas(project_name, regions_to_include)
 You will see a multifasta appear for each of the regions you specified. For example: "./Blackwellomyces_tree/phylogenies/ITS.RPB2.TEF/prep/ITS/Blackwellomyces_tree.ITS.RPB2.TEF.ITS.raw.fasta"
 
 
-## 3) Align each region
+## 4) Align each region
 
 Once the raw multifasta files are created for each region, the next step is to align the sequences. This step is carried out separately for each region you specified. By default, aRborist uses the alignment software MAFFT (although I may add more alignment software options in the future).
 
@@ -381,7 +382,7 @@ Note:  Before proceeding further, I recommened checking the alignments with a al
 
 <br>
 
-## 4) Trim each region
+## 5) Trim each region
 
 After alignment, many columns in the alignment may contain mostly gaps or poorly aligned positions. We also need to ensure that all the sequences for a particular region are the same length. aRborist uses TrimAl to perform these steps. 
 
@@ -403,7 +404,7 @@ After this step, you will see a multifasta for the trimmed and aligned files (<r
 
 <br>
 
-## 5) Create single-gene trees
+## 6) Create single-gene trees
 
 Once you have trimmed alignments for each gene, the next step is to generate individual maximum-likelihood trees for each of your specified regions. If you are only interested in making a phylogeny from a single region, you can stop after this step as you will have your final tree (./single_gene_trees/<region>/<project>.<region>.modeltest.contree). 
 
@@ -424,7 +425,7 @@ iqtree_modelfinder_per_region(
 
 <br>
 
-## 6) Create files necessary for multi-gene tree creation
+## 7) Create files necessary for multi-gene tree creation
 
 The next step is to create the necessary files for the multi-gene tree in IQ-TREE. This step will create a concatenated supermatrix from the trimmed and aligned sequences, as well as a nexus (.nex) file that will store the sequence length and best substition model for each region. 
 
@@ -434,7 +435,7 @@ concatenate_and_write_partitions(project_name, regions_to_include)
 
 <br>
 
-## 7)  Create multi-gene tree with partitioned analysis
+## 8)  Create multi-gene tree with partitioned analysis
 
 When creating phylogenies from multiple genes, I prefer to run a [partitioned analysis](https://iqtree.github.io/doc/Advanced-Tutorial) rather than use a single substituion model with the concatenated supermatrix. 
 
