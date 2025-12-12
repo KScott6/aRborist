@@ -462,13 +462,13 @@ After this step, the multi-gene phylogeny pipeline is complete. You can find you
 
 Make sure you cite all the software and methods used wrapped into this pipeline. 
 
-MAFFT:
+MAFFT: Katoh, K. and Standley, D.M., 2013. MAFFT multiple sequence alignment software version 7: improvements in performance and usability. Molecular biology and evolution, 30(4), pp.772-780.
 
-TrimAL:
+TrimAL: Capella-Gutiérrez, S., Silla-Martínez, J.M. and Gabaldón, T., 2009. trimAl: a tool for automated alignment trimming in large-scale phylogenetic analyses. Bioinformatics, 25(15), pp.1972-1973.
 
-IQ-TREE:
+IQ-TREE: Wong, T.K., Ly-Trong, N., Ren, H., Baños, H., Roger, A.J., Susko, E., Bielow, C., De Maio, N., Goldman, N., Hahn, M.W. and Huttley, G., 2025. IQ-TREE 3: Phylogenomic Inference Software using Complex Evolutionary Models.
 
-Partitioned analysis: 
+Partitioned analysis: Chernomor, O., Von Haeseler, A. and Minh, B.Q., 2016. Terrace aware data structure for phylogenomic inference from supermatrices. Systematic biology, 65(6), pp.997-1008.
 
 <br>
 <br>
