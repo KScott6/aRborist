@@ -1,5 +1,5 @@
 # ============================================================
-# aRborist
+#                         aRborist
 # ============================================================
 
 # ============================================================
@@ -39,8 +39,8 @@ sort_regions <- function(regions_to_include) {
   sorted
 }
 
-# Defaults for entrez search term
-# My preferred search term defaults (can be overridden by user)
+# defaults for entrez search term
+# I set my preferred search term defaults (can be overridden by user)
 default_organism_scope <- "txid4751[Organism:exp]"  # fungi
 
 default_search_include <- c(
@@ -52,7 +52,7 @@ default_search_exclude <- c(
   "mitochondrion[filter]"
 )
 
-# Initialize .GlobalEnv overrides if they don't exist
+# initialize .GlobalEnv overrides if they don't exist
 if (!exists("organism_scope", .GlobalEnv) ||
     is.null(get("organism_scope", .GlobalEnv)) ||
     !nzchar(get("organism_scope", .GlobalEnv))) {
@@ -74,7 +74,7 @@ compose_entrez_term <- function(taxon,
                                 organism_scope  = NULL,
                                 include_filters = NULL,
                                 exclude_filters = NULL) {
-  # 1) Resolve arguments in priority:
+  # Resolve arguments in priority:
   #    explicit arg > .GlobalEnv override > package default
   if (is.null(organism_scope)) {
     organism_scope <- get0("organism_scope", envir = .GlobalEnv,
@@ -89,22 +89,22 @@ compose_entrez_term <- function(taxon,
                             ifnotfound = default_search_exclude)
   }
 
-  # 2) Base organism term
+  # Base organism term
   q <- sprintf('"%s"[Organism]', taxon)
 
-  # 3) Add organism_scope (e.g. txid4751[Organism:exp])
+  #  Add organism_scope (like txid4751[Organism:exp])
   if (!is.null(organism_scope) && nzchar(organism_scope)) {
     q <- paste(q, organism_scope, sep = " AND ")
   }
 
-  # 4) Add positive filters with AND
+  #  Add positive filters with AND
   include_filters <- include_filters[nzchar(include_filters)]
   if (length(include_filters) > 0) {
     include_str <- paste(include_filters, collapse = " AND ")
     q <- paste(q, include_str, sep = " AND ")
   }
 
-  # 5) Add negative filters with NOT (no leading AND)
+  # Add negative filters with NOT 
   exclude_filters <- exclude_filters[nzchar(exclude_filters)]
   if (length(exclude_filters) > 0) {
     not_str <- paste(paste("NOT", exclude_filters), collapse = " ")
@@ -215,7 +215,7 @@ fetch_accessions_for_taxon <- function(taxon,
   if (is.null(exclude_filters) && exists("search_exclude", .GlobalEnv))
     exclude_filters <- get("search_exclude", .GlobalEnv)
 
-  # Build full query string
+  # build full query string
   filters <- compose_entrez_term(
     taxon            = taxon,
     organism_scope   = organism_scope,
@@ -380,7 +380,7 @@ fetch_metadata_for_accession <- function(accession) {
       "GBSeq_update-date","GBSeq_create-date","GBSeq_definition",
       "GBSeq_accession-version","GBSeq_project","GBSeq_organism","GBSeq_taxonomy",
       "GBSeq_sequence",
-      # qualifiers
+      # qualifiers - there are definitely more of these available, these are just my preferred list
       "isolation_source","host","country","lat_lon","collection_date","geo_loc_name",
       "strain","isolate","culture_collection","specimen_voucher",
       "type_material","identified_by","note","gene","product","db_xref"
@@ -409,7 +409,7 @@ fetch_metadata_for_accession <- function(accession) {
   q_values <- XML::xpathSApply(doc, "//GBQualifier/GBQualifier_value", xmlValue)
   quals <- data.frame(name = q_names, value = q_values, stringsAsFactors = FALSE)
 
-  # make a named list for qualifiers we care about
+  # make a named list for qualifiers I care about
   get_q <- function(nm) {
     v <- quals$value[quals$name == nm]
     if (length(v) == 0) "" else paste(unique(v), collapse = "; ")
@@ -731,7 +731,7 @@ prepare_host_terms <- function(
     paste0("host_terms_for_taxonomy_", project_name, ".csv")
   )
   
-  # Keep column name 'host' for compatibility with current run_host_taxonomy_lookup()
+  # keep column name 'host' for compatibility with current run_host_taxonomy_lookup()
   write.csv(
     data.frame(host = host_terms, stringsAsFactors = FALSE),
     out_path,
@@ -764,7 +764,7 @@ run_host_taxonomy_lookup <- function(
   # host_terms_for_taxonomy has a column named 'host'
   host_terms <- read.csv(terms_path, stringsAsFactors = FALSE)$host
   
-  # Sanity clean: drop NA / "" / literal "NA"
+  # Sanity cleaning step : drop NA / "" / literal "NA"
   bad <- is.na(host_terms) |
     host_terms == "" |
     toupper(trimws(host_terms)) == "NA"
@@ -780,7 +780,7 @@ run_host_taxonomy_lookup <- function(
     paste0("host_failed_terms_", project_name, ".csv")
   )
   
-  # ---- helper to validate taxize result ----
+  # helper to validate taxize result
   is_valid_tax_table <- function(x) {
     is.data.frame(x) &&
       nrow(x) > 0 &&
@@ -791,7 +791,7 @@ run_host_taxonomy_lookup <- function(
   if (file.exists(taxonomy_path)) {
     host_taxonomy <- read.csv(taxonomy_path, stringsAsFactors = FALSE)
     
-    # Legacy: older pipeline used "Host.standard"
+    # Legacy: my older pipeline used "Host.standard"
     if (!"Host.standardized" %in% names(host_taxonomy)) {
       if ("Host.standard" %in% names(host_taxonomy)) {
         message("Detected legacy taxonomy file. Renaming 'Host.standard' to 'Host.standardized'.")
@@ -848,7 +848,7 @@ run_host_taxonomy_lookup <- function(
   message("Host taxonomy lookup starting for ", length(to_query),
           " new standardized host terms.")
   
-  # Containers for this run
+  # containers for this run
   successful_rows <- list()
   failed_terms    <- character(0)
   
@@ -939,7 +939,7 @@ run_host_taxonomy_lookup <- function(
     )
   }
   
-  # Add new failed terms if they are not already present
+  # add new failed terms if they are not already present
   for (ft in unique(failed_terms)) {
     if (!ft %in% failed_df$original_term) {
       failed_df <- rbind(
@@ -957,7 +957,7 @@ run_host_taxonomy_lookup <- function(
   write.csv(failed_df, failed_path, row.names = FALSE)
   message("Failed terms mapping file written to: ", failed_path)
   
-  # Console summary
+  # Console summary - just a preview
   newly_success <- if (length(successful_rows) > 0)
     nrow(do.call(rbind, successful_rows)) else 0
   
@@ -1061,7 +1061,7 @@ merge_host_taxonomy_into_metadata <- function(
     project_name,
     host_dir = "./host_assessment"
 ) {
-  # 1) Load curated metadata
+  # Load curated metadata
   meta_path <- paste0(
     "./metadata_files/all_accessions_pulled_metadata_",
     project_name,
@@ -1074,7 +1074,7 @@ merge_host_taxonomy_into_metadata <- function(
   
   meta <- read.csv(meta_path, stringsAsFactors = FALSE)
   
-  # 2) Ensure host.standardized exists (default = original 'host')
+  # Ensure host.standardized exists (default = original 'host')
   if (!"host.standardized" %in% names(meta)) {
     if ("host" %in% names(meta)) {
       meta$host.standardized <- meta$host
@@ -1083,7 +1083,7 @@ merge_host_taxonomy_into_metadata <- function(
     }
   }
   
-  # 3) Load host taxonomy table
+  # load host taxonomy table
   host_tax_path <- file.path(host_dir, paste0("host_taxonomy_", project_name, ".csv"))
   if (!file.exists(host_tax_path)) {
     stop("Host taxonomy file not found at: ", host_tax_path,
@@ -1099,12 +1099,12 @@ merge_host_taxonomy_into_metadata <- function(
     )
   }
   
-  # 3b) Deduplicate host_taxonomy by Host.standardized (keep first)
+  #  De-duplicate host_taxonomy by Host.standardized (keep first)
   host_tax <- host_tax %>%
     dplyr::filter(!is.na(Host.standardized) & Host.standardized != "") %>%
     dplyr::distinct(Host.standardized, .keep_all = TRUE)
   
-  # 4) DROP any existing Host.* columns from metadata to avoid .x/.y/.x.x zoo
+  # DROP any existing Host.* columns from metadata to avoid .x/.y/.x.x zoo
   existing_host_cols <- grep("^Host\\.", names(meta), value = TRUE)
   if (length(existing_host_cols) > 0) {
     message("Removing existing Host.* columns from metadata before merge: ",
@@ -1112,14 +1112,14 @@ merge_host_taxonomy_into_metadata <- function(
     meta <- meta[, setdiff(names(meta), existing_host_cols), drop = FALSE]
   }
   
-  # 5) Left-join taxonomy on host.standardized
+  # Left-join taxonomy on host.standardized
   meta_merged <- meta %>%
     dplyr::left_join(
       host_tax,
       by = c("host.standardized" = "Host.standardized")
     )
   
-  # 6) Ensure Strain.taxonomy exists, populated from GBSeq_taxonomy if available
+  # Ensure Strain.taxonomy exists, populated from GBSeq_taxonomy if available
   if (!"Strain.taxonomy" %in% names(meta_merged)) {
     if ("GBSeq_taxonomy" %in% names(meta_merged)) {
       meta_merged$Strain.taxonomy <- meta_merged$GBSeq_taxonomy
@@ -1131,7 +1131,7 @@ merge_host_taxonomy_into_metadata <- function(
     }
   }
   
-  # 7) Write updated metadata (overwriting previous curated file)
+  #  Write updated metadata (overwriting previous curated file)
   write.csv(
     meta_merged,
     meta_path,
@@ -1140,7 +1140,7 @@ merge_host_taxonomy_into_metadata <- function(
   
   message("Merged host taxonomy into metadata and wrote updated file:\n  ", meta_path)
   
-  # 8) Summary
+  # Summary
   n_total <- nrow(meta_merged)
   
   n_host_raw <- if ("host" %in% names(meta_merged)) {
@@ -1184,7 +1184,7 @@ summarize_host_usage <- function(
 ) {
   if (!dir.exists(host_dir)) dir.create(host_dir, recursive = TRUE)
   
-  # 1) Load curated + host-merged metadata
+  #  Load curated + host-merged metadata
   meta_path <- paste0(
     "./metadata_files/all_accessions_pulled_metadata_",
     project_name,
@@ -1204,7 +1204,7 @@ summarize_host_usage <- function(
          paste(grep("^Host\\.", names(meta), value = TRUE), collapse = ", "))
   }
   
-  # 2) Build a working data frame: organism + host_rank
+  # Build a working data frame: organism + host_rank
   df <- meta %>%
     dplyr::select(organism, !!host_col) %>%
     dplyr::mutate(
@@ -1233,14 +1233,14 @@ summarize_host_usage <- function(
       dplyr::filter(!is.na(host_val) & host_val != "")
   }
   
-  # 3) If nothing left, bail gracefully
+  # If nothing left, stop
   if (nrow(df) == 0) {
     warning("No rows with usable host annotations after filtering (keep_NAs = ",
             keep_NAs, "). Nothing to summarize.")
     return(invisible(NULL))
   }
   
-  # 4) Count accessions by organism × host category
+  # Count accessions by organism × host category
   counts_long <- df %>%
     dplyr::filter(!grepl("\\ssp\\.", organism)) %>%  # remove " sp." species
     dplyr::count(organism, host_val, name = "accession_count")
@@ -1250,7 +1250,7 @@ summarize_host_usage <- function(
     return(invisible(NULL))
   }
   
-  # 5) Wide format: one row per organism, columns per host_val (counts)
+  # wide format: one row per organism, columns per host_val (counts)
   counts_wide <- counts_long %>%
     tidyr::pivot_wider(
       names_from  = host_val,
@@ -1258,7 +1258,7 @@ summarize_host_usage <- function(
       values_fill = list(accession_count = 0)
     )
   
-  # 6) Calculate accession.count and percentages for each host category
+  # Calculate accession.count and percentages for each host category
   host_cols <- setdiff(names(counts_wide), "organism")
   
   counts_wide <- counts_wide %>%
@@ -1281,7 +1281,7 @@ summarize_host_usage <- function(
   host_cols_local <- host_cols
   perc_cols_local <- perc_cols
   
-  # 7) Add "top_host_categories" + "host_profile"
+  # Add "top_host_categories" + "host_profile"
   result <- result %>%
     dplyr::rowwise() %>%
     dplyr::mutate(
@@ -1318,7 +1318,7 @@ summarize_host_usage <- function(
     ) %>%
     dplyr::ungroup()
   
-  # 8) Write out summary
+  # Write out summary
   out_path <- file.path(
     host_dir,
     paste0("host_usage_by_", host_rank, "_", project_name, ".csv")
@@ -1683,9 +1683,9 @@ select_regions <- function(project_name,
   write.csv(select_region_attendance_filtered, output_wide, row.names = FALSE)
 
   # 8) Messages for user
-  message("✓ Filtered metadata written to: ", output_long)
-  message("✓ Region attendance sheet written to: ", output_wide)
-  message("✓ Region set: ", region_set_name)
+  message("Filtered metadata written to: ", output_long)
+  message("Region attendance sheet written to: ", output_wide)
+  message("Region set: ", region_set_name)
 }
 
 create_multifastas <- function(project_name,
@@ -2152,7 +2152,7 @@ iqtree_modelfinder_per_region <- function(project_name,
   invisible(model_fits)
 }
 
-# Create Projects/<project_name>/ and run your normal structure inside it.
+# Create Projects/<project_name>/, and run normal structure inside it.
 if (!exists("arborist_repo", envir = .GlobalEnv)) {
   arborist_repo <- normalizePath("~/github/aRborist")
 }
@@ -2178,7 +2178,7 @@ start_project <- function(project_name,
   # optional but useful: work inside the project
   setwd(base_dir)
 
-  # your existing function that makes metadata_files/, etc.
+  # makes metadata_files
   if (exists("setup_project_structure")) {
     setup_project_structure(base_dir)
   }
@@ -2275,7 +2275,7 @@ concatenate_and_write_partitions <- function(project_name,
     warning("Concatenated alignment length does not match sum of region lengths.")
   }
 
-  # 5) Write concatenated supermatrix FASTA
+  # 5) write concatenated supermatrix FASTA
   concat_path <- file.path(
     multi_gene_dir,
     paste0("concatenated_", project_name, ".", region_set_name, ".fasta")
