@@ -37,6 +37,8 @@ Save this file and restart your R instance. Then in R:
 Sys.getenv("NCBI_API_KEY")  # should show your key (or at least not be empty)
 ```
 
+<br>
+
 ### 2) Get the code
 
 In R: 
@@ -47,9 +49,17 @@ usethis::create_from_github("KScott6/aRborist")
 
 This will automatically create an R project file "aRborist.Rproj". You can working in this project file.
 
+<br>
+
 ### 3) Install/load the required packages
 
+In R, change your working directory to where you have downloaded the aRborist scripts. 
+
+For me, it was: `/Users/scott/github/aRborist`
+
 ```R
+setwd("/Users/scott/github/aRborist") # change to your download location.
+
 source(file.path("R", "prepare.R"))  # installs any missing packages required by aRborist
 ```
 
@@ -57,11 +67,14 @@ The first time setup is now complete.
 
 ---
 
+<br>
+
 ## aRborist walkthrough
 
 ### 1) Load packages and helper scripts (run once per new project)
 
 ```R
+setwd("/Users/scott/github/aRborist") # change to your aRBorist download location.
 source(file.path("R", "arborist_helpers.R"))
 load_required_packages()
 ```
@@ -89,9 +102,15 @@ Exaplaination of options:
 
 `taxa_of_interest` Provide a list of genus or species names to search on NCBI. 
 
-`organism_scope` Change to your target taxa's correct kingdom. You can use either NCBI taxonomy codes or simple names ("txid2[Organism:exp]" = "Bacteria[Organism:exp]"; "txid33090[Organism:exp]" = "Viridiplantae"). Fungi (txid4751) is the default option. Using this option helps reduce the number of incorrect hits during your search. Leave blank ("") to not have any organism contraints in your search (not recommended).
+`organism_scope` Change to your target taxa's correct kingdom. This help reduce incorrect hits. Leave as "" to remove this restriction, though that is usually not recommended. Examples:
 
-`search_options` Change to fit your search needs. Use the terms for the [NCBI advanced search](https://www.ncbi.nlm.nih.gov/nuccore/advanced). The default search string is shown.
+* Fungi: "txid4751[Organism:exp]"
+* Bacteria: "txid2[Organism:exp]"
+* Plants: "txid33090[Organism:exp]"
+
+`include_filters` A character vector of NCBI search filters that must be included in the search.
+
+`exclude_filters` A character vector of NCBI search filters that should be excluded from the search.
 
 `max_acc_per_taxa` Provive integer value to specify the maximum number of accessions to obtain for each taxon name. Use the option "max" to retrieve **all** the matching NCBI hits -- but be warned that for taxa with many accessions (Fusarium, Alternaria, etc.) this can make the metadata retreival step take **<u>a really long time</u>** (days). 
 
@@ -101,22 +120,33 @@ Exaplaination of options:
 
 ```R
 # Set options for this project
-taxa_of_interest   <- c("Blackwellomyces", "Flavocillium")
-organism_scope <- "txid4751[Organism:exp]"
-search_options <- "(biomol_genomic[PROP] AND (100[SLEN]:5000[SLEN])) NOT Contig[All Fields] NOT scaffold[All Fields] NOT genome[All Fields]"
-max_acc_per_taxa   <- 1000 # specify "max" to obtain all matching hits
-ncbi_api_key <- Sys.getenv("NCBI_API_KEY")
-my_lab_sequences   <- "" 
+taxa_of_interest <- c("Blackwellomyces", "Flavocillium")
 
-# Save the exact options you used in your project folder (for reproducibility)
+organism_scope <- "txid4751[Organism:exp]"
+
+include_filters <- c(
+  "biomol_genomic[PROP]",
+  "(100[SLEN]:5000[SLEN])"
+)
+
+exclude_filters <- c(
+  "Contig[All Fields]",
+  "scaffold[All Fields]",
+  "genome[All Fields]"
+)
+
+max_acc_per_taxa <- 1000   # use "max" to retrieve all matching hits
+ncbi_api_key <- Sys.getenv("NCBI_API_KEY")
+my_lab_sequences <- ""
+
+# Save the exact options you used in your project folder
 save_project_config(
-  project_dir            = getwd(),
-  project_name           = project_name,
-  taxa_of_interest       = taxa_of_interest,          
-  my_lab_sequences       = my_lab_sequences,
-  organism_scope         = organism_scope,
-  search_options         = search_options,
-  max_acc_per_taxa       = max_acc_per_taxa    
+  project_dir = getwd(),
+  project_name = project_name,
+  taxa_of_interest = taxa_of_interest,
+  my_lab_sequences = my_lab_sequences,
+  organism_scope = organism_scope,
+  max_acc_per_taxa = max_acc_per_taxa
 )
 
 ```
@@ -130,7 +160,14 @@ A note - when you search a term on NCBI, it will sometimes return accessions you
 If you've already set the values for "project_name", "max_acc_per_taxa", and "taxa_of_interest", you don't need to change the following command - just copy/paste/run as-is.
 
 ```R
-ncbi_data_fetch(project_name, max_acc_per_taxa, taxa_of_interest)
+ncbi_data_fetch(
+  taxa_list = taxa_of_interest,
+  max_acc_per_taxa = max_acc_per_taxa,
+  organism_scope = organism_scope,
+  include_filters = include_filters,
+  exclude_filters = exclude_filters,
+  project_name = project_name
+)
 ```
 
 <br>
