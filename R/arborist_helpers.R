@@ -193,7 +193,7 @@ start_project <- function(project_name,
   is_new <- !dir.exists(project_dir)
   
   setup_project_structure(project_dir = project_dir, set_wd = set_wd)
-  
+  assign("base_dir", project_dir, envir = .GlobalEnv)
   assign("arborist_home", arborist_home, envir = .GlobalEnv)
   assign("project_name", project_name, envir = .GlobalEnv)
   assign("project_dir", project_dir, envir = .GlobalEnv)
@@ -224,6 +224,7 @@ open_project <- function(project_name,
   }
   
   if (assign_to_global) {
+    assign("base_dir", project_dir, envir = .GlobalEnv)
     assign("arborist_home", normalize_dir(arborist_home, mustWork = FALSE), envir = .GlobalEnv)
     assign("project_name", project_name, envir = .GlobalEnv)
     assign("project_dir", project_dir, envir = .GlobalEnv)
@@ -2287,35 +2288,6 @@ iqtree_modelfinder_per_region <- function(project_name,
 # Create Projects/<project_name>/ and run your normal structure inside it.
 if (!exists("arborist_repo", envir = .GlobalEnv)) {
   arborist_repo <- normalizePath("~/github/aRborist")
-}
-
-start_project <- function(project_name,
-                          projects_dir = file.path(arborist_repo, "projects")) {
-  
-  if (!dir.exists(projects_dir)) {
-    dir.create(projects_dir, recursive = TRUE)
-    message("Created projects dir: ", projects_dir)
-  }
-  
-  base_dir <- file.path(projects_dir, project_name)
-  if (!dir.exists(base_dir)) {
-    dir.create(base_dir, recursive = TRUE)
-    message("Created project dir: ", base_dir)
-  }
-  
-  # make these visible to the rest of the pipeline
-  assign("project_name", project_name, envir = .GlobalEnv)
-  assign("base_dir", base_dir, envir = .GlobalEnv)
-  
-  # optional but useful: work inside the project
-  setwd(base_dir)
-  
-  # your existing function that makes metadata_files/, etc.
-  if (exists("setup_project_structure")) {
-    setup_project_structure(base_dir)
-  }
-  
-  invisible(normalizePath(base_dir))
 }
 
 concatenate_and_write_partitions <- function(project_name,
