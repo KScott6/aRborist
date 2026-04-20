@@ -74,7 +74,7 @@ The first time setup is now complete.
 ### 1) Load packages and helper scripts (run once per new project)
 
 ```R
-setwd("/Users/scott/github/aRborist") # change to your aRBorist download location.
+setwd("/Users/$USER/github/aRborist") # change to your arborist download location
 source(file.path("R", "arborist_helpers.R"))
 load_required_packages()
 ```
@@ -84,17 +84,21 @@ load_required_packages()
 Set the location you prefer to have your aRborist project folder in; ("~") is default. Then, select a unique name for your project. You can revisit individual projects later on by referencing their project name.
 
 ```R
-projects_dir <- file.path(path.expand("~"), "aRborist_Projects")
+arborist_home <- "/Users/scott/aRborist_Projects"
 project_name <- "Blackwellomyces_tree_2025_10_16"
 ```
 
 Then run:
 
 ```R
-start_project(projects_dir, project_name) 
+start_project(project_name = project_name,
+              arborist_home = arborist_home)
+
+project_dir
+project_paths()
 ```
 
-This will automatically create the necessary project folders and subfolders. 
+This will automatically create the necessary project folders and subfolders. (/Users/$USER/aRborist_Projects/Blackwellomyces_tree_2025_10_16)
 
 ### 3) Set options for your project
 
