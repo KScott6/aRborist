@@ -104,7 +104,7 @@ This will automatically create the necessary project folders and subfolders. (/U
 
 Exaplaination of options:
 
-`taxa_of_interest` Provide a list of genus or species names to search on NCBI. 
+`taxa_of_interest` Provide one or more genus/species names to search on NCBI, or provide a file that contains a list.
 
 `organism_scope` Change to your target taxa's correct kingdom. This help reduce incorrect hits. Leave as "" to remove this restriction, though that is usually not recommended. Examples:
 
@@ -112,9 +112,9 @@ Exaplaination of options:
 * Bacteria: "txid2[Organism:exp]"
 * Plants: "txid33090[Organism:exp]"
 
-`include_filters` A character vector of NCBI search filters that must be included in the search.
+`search_include` A character vector of NCBI search filters that must be included in the search.
 
-`exclude_filters` A character vector of NCBI search filters that should be excluded from the search.
+`search_exclude` A character vector of NCBI search filters that should be excluded from the search.
 
 `max_acc_per_taxa` Provive integer value to specify the maximum number of accessions to obtain for each taxon name. Use the option "max" to retrieve **all** the matching NCBI hits -- but be warned that for taxa with many accessions (Fusarium, Alternaria, etc.) this can make the metadata retreival step take **<u>a really long time</u>** (days). 
 
@@ -126,14 +126,17 @@ Exaplaination of options:
 # Set options for this project
 taxa_of_interest <- c("Blackwellomyces", "Flavocillium")
 
+# or, read in a file like this:
+# taxa_of_interest <- read_lines("/Users/$USER/Desktop/genera.txt")
+
 organism_scope <- "txid4751[Organism:exp]"
 
-include_filters <- c(
+search_include <- c(
   "biomol_genomic[PROP]",
   "(100[SLEN]:5000[SLEN])"
 )
 
-exclude_filters <- c(
+search_exclude <- c(
   "Contig[All Fields]",
   "scaffold[All Fields]",
   "genome[All Fields]"
@@ -145,7 +148,7 @@ my_lab_sequences <- ""
 
 # Save the exact options you used in your project folder
 save_project_config(
-  project_dir = getwd(),
+  project_dir = project_dir,
   project_name = project_name,
   taxa_of_interest = taxa_of_interest,
   my_lab_sequences = my_lab_sequences,
@@ -168,8 +171,8 @@ ncbi_data_fetch(
   taxa_list = taxa_of_interest,
   max_acc_per_taxa = max_acc_per_taxa,
   organism_scope = organism_scope,
-  include_filters = include_filters,
-  exclude_filters = exclude_filters,
+  include_filters = search_include,
+  exclude_filters = search_exclude,
   project_name = project_name
 )
 ```
