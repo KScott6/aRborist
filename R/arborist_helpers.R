@@ -6,12 +6,13 @@
 # aRborist helper functions and defaults
 # ============================================================
 
+# Package setup
 required_packages <- c(
   "rentrez","stringr","plyr","dplyr","withr","XML",
   "data.table","tidyr","phylotools","scales",
   "purrr","readr","phytools","RColorBrewer",
   "maps","ggplot2","tidygeocoder",
-  "ggrepel","taxize","Biostrings","yaml"
+  "ggrepel","taxize","Biostrings", "yaml","readr"
 )
 
 installed_packages <- required_packages %in% rownames(installed.packages())
@@ -24,6 +25,7 @@ load_required_packages <- function() {
 }
 
 # region sorting
+# makes sure there is a consistent, sorted set of regions at each step
 sort_regions <- function(regions_to_include) {
   sorted <- sort(unique(regions_to_include))
   if (!identical(regions_to_include, sorted)) {
@@ -38,18 +40,19 @@ sort_regions <- function(regions_to_include) {
 }
 
 # Defaults for entrez search term
-default_organism_scope <- "txid4751[Organism:exp]"
+# My preferred search term defaults (can be overridden by user)
+default_organism_scope <- "txid4751[Organism:exp]"  # fungi
 
 default_search_include <- c(
   "biomol_genomic[PROP]",
   "is_nuccore[filter]",
   "(00000000100[SLEN] : 00000005000[SLEN])"
 )
-
 default_search_exclude <- c(
   "mitochondrion[filter]"
 )
 
+# Initialize .GlobalEnv overrides if they don't exist
 if (!exists("organism_scope", .GlobalEnv) ||
     is.null(get("organism_scope", .GlobalEnv)) ||
     !nzchar(get("organism_scope", .GlobalEnv))) {
@@ -66,10 +69,13 @@ if (!exists("search_exclude", .GlobalEnv) ||
   assign("search_exclude", default_search_exclude, .GlobalEnv)
 }
 
+# making full search term for entrez
 compose_entrez_term <- function(taxon,
                                 organism_scope  = NULL,
                                 include_filters = NULL,
                                 exclude_filters = NULL) {
+  # 1) Resolve arguments in priority:
+  #    explicit arg > .GlobalEnv override > package default
   if (is.null(organism_scope)) {
     organism_scope <- get0("organism_scope", envir = .GlobalEnv,
                            ifnotfound = default_organism_scope)
@@ -83,18 +89,22 @@ compose_entrez_term <- function(taxon,
                             ifnotfound = default_search_exclude)
   }
   
+  # 2) Base organism term
   q <- sprintf('"%s"[Organism]', taxon)
   
+  # 3) Add organism_scope (e.g. txid4751[Organism:exp])
   if (!is.null(organism_scope) && nzchar(organism_scope)) {
     q <- paste(q, organism_scope, sep = " AND ")
   }
   
+  # 4) Add positive filters with AND
   include_filters <- include_filters[nzchar(include_filters)]
   if (length(include_filters) > 0) {
     include_str <- paste(include_filters, collapse = " AND ")
     q <- paste(q, include_str, sep = " AND ")
   }
   
+  # 5) Add negative filters with NOT (no leading AND)
   exclude_filters <- exclude_filters[nzchar(exclude_filters)]
   if (length(exclude_filters) > 0) {
     not_str <- paste(paste("NOT", exclude_filters), collapse = " ")
@@ -104,6 +114,7 @@ compose_entrez_term <- function(taxon,
   q
 }
 
+# default metadata categories to keep in search
 if (!exists("metadata_categories_keep", .GlobalEnv)) {
   metadata_categories_keep <- c(
     "GBSeq_locus","GBSeq_length","GBSeq_strandedness","GBSeq_moltype",
@@ -113,212 +124,71 @@ if (!exists("metadata_categories_keep", .GlobalEnv)) {
   )
 }
 
-get_sleep_duration <- function() {
-  key <- get0("ncbi_api_key", envir = .GlobalEnv, ifnotfound = "")
-  if (!is.null(key) && nzchar(key)) 0.2 else 0.5
-}
-
-if (exists("ncbi_api_key", .GlobalEnv) &&
-    !is.null(get("ncbi_api_key", .GlobalEnv)) &&
-    nzchar(get("ncbi_api_key", .GlobalEnv))) {
-  rentrez::set_entrez_key(get("ncbi_api_key", .GlobalEnv))
-}
-
-# ------------------------------
-# Safe project helpers
-# ------------------------------
-
-default_arborist_home <- file.path(path.expand("~"), "aRborist_Projects")
-
-normalize_dir <- function(path, mustWork = FALSE) {
-  normalizePath(path.expand(path), winslash = "/", mustWork = mustWork)
-}
-
-sanitize_project_name <- function(project_name) {
-  x <- trimws(project_name)
-  x <- gsub("[/\\\\]", "_", x)
-  x <- gsub("\\s+", "_", x)
-  if (!nzchar(x)) stop("project_name is empty after sanitization.")
-  x
-}
-
-get_project_dir <- function(project_name,
-                            arborist_home = default_arborist_home) {
-  project_name <- sanitize_project_name(project_name)
-  arborist_home <- normalize_dir(arborist_home, mustWork = FALSE)
-  file.path(arborist_home, project_name)
-}
-
+# setup oroject structure
 setup_project_structure <- function(project_dir,
-                                    subdirs = c(
-                                      "metadata_files",
-                                      "intermediate_files",
-                                      "logs",
-                                      "plots",
-                                      "tables",
-                                      "accessions"
-                                    ),
-                                    set_wd = TRUE) {
-  if (!dir.exists(project_dir)) {
-    dir.create(project_dir, recursive = TRUE, showWarnings = FALSE)
-  }
-  
+                                    subdirs = c("intermediate_files", "metadata_files")) {
+  if (!dir.exists(project_dir)) dir.create(project_dir)
   for (dir in subdirs) {
     full_path <- file.path(project_dir, dir)
-    if (!dir.exists(full_path)) {
-      dir.create(full_path, recursive = TRUE, showWarnings = FALSE)
-    }
+    if (!dir.exists(full_path)) dir.create(full_path, recursive = TRUE)
   }
-  
-  if (set_wd) {
-    setwd(project_dir)
-  }
-  
-  invisible(project_dir)
+  setwd(project_dir)
 }
 
-start_project <- function(project_name,
-                          arborist_home = default_arborist_home,
-                          set_wd = TRUE) {
-  project_name <- sanitize_project_name(project_name)
-  arborist_home <- normalize_dir(arborist_home, mustWork = FALSE)
-  
-  if (!dir.exists(arborist_home)) {
-    dir.create(arborist_home, recursive = TRUE, showWarnings = FALSE)
-    message("Created projects dir: ", arborist_home)
-  }
-  
-  project_dir <- file.path(arborist_home, project_name)
-  
-  is_new <- !dir.exists(project_dir)
-  
-  setup_project_structure(project_dir = project_dir, set_wd = set_wd)
-  assign("base_dir", project_dir, envir = .GlobalEnv)
-  assign("arborist_home", arborist_home, envir = .GlobalEnv)
-  assign("project_name", project_name, envir = .GlobalEnv)
-  assign("project_dir", project_dir, envir = .GlobalEnv)
-  
-  if (is_new) {
-    message("Created project dir: ", project_dir)
-  } else {
-    message("Opened existing project dir: ", project_dir)
-  }
-  
-  invisible(project_dir)
+# Sleep helper (uses ncbi_api_key from global env)
+# this is not using the "10 requests/sec with API, 3 requests/sec without" timing because I noticed the requests were being bunched up and sent in groups, resulting in a noticable percentage of my requests getting denied. 
+# you can mess with the timings if you want, but watch out for denied requests
+get_sleep_duration <- function() {
+  if (!is.null(ncbi_api_key) && nzchar(ncbi_api_key)) 0.2 else 0.5
+}
+if (exists("ncbi_api_key") && !is.null(ncbi_api_key) && nzchar(ncbi_api_key)) {
+  rentrez::set_entrez_key(ncbi_api_key)
 }
 
-open_project <- function(project_name,
-                         arborist_home = default_arborist_home,
-                         set_wd = TRUE,
-                         restore_config = TRUE,
-                         assign_to_global = TRUE) {
-  project_name <- sanitize_project_name(project_name)
-  project_dir <- get_project_dir(project_name, arborist_home)
-  
-  if (!dir.exists(project_dir)) {
-    stop("Project directory does not exist: ", project_dir)
-  }
-  
-  if (set_wd) {
-    setwd(project_dir)
-  }
-  
-  if (assign_to_global) {
-    assign("base_dir", project_dir, envir = .GlobalEnv)
-    assign("arborist_home", normalize_dir(arborist_home, mustWork = FALSE), envir = .GlobalEnv)
-    assign("project_name", project_name, envir = .GlobalEnv)
-    assign("project_dir", project_dir, envir = .GlobalEnv)
-  }
-  
-  if (restore_config && file.exists(file.path(project_dir, "config.yml"))) {
-    restore_project_config(project_dir = project_dir, assign_to_global = assign_to_global)
-  }
-  
-  message("Opened project dir: ", project_dir)
-  invisible(project_dir)
-}
-
-save_project_config <- function(project_dir = get0("project_dir", .GlobalEnv, ifnotfound = getwd()),
-                                project_name = get0("project_name", .GlobalEnv, ifnotfound = basename(project_dir)),
-                                taxa_of_interest = get0("taxa_of_interest", .GlobalEnv, ifnotfound = NULL),
-                                regions_to_include = get0("regions_to_include", .GlobalEnv, ifnotfound = NULL),
-                                max_acc_per_taxa = get0("max_acc_per_taxa", .GlobalEnv, ifnotfound = NULL),
-                                min_region_requirement = get0("min_region_requirement", .GlobalEnv, ifnotfound = NULL),
-                                my_lab_sequences = get0("my_lab_sequences", .GlobalEnv, ifnotfound = ""),
-                                acc_to_exclude = get0("acc_to_exclude", .GlobalEnv, ifnotfound = NULL),
-                                organism_scope = get0("organism_scope", .GlobalEnv, ifnotfound = NULL),
-                                search_include = get0("search_include", .GlobalEnv, ifnotfound = NULL),
-                                search_exclude = get0("search_exclude", .GlobalEnv, ifnotfound = NULL),
+# Save the run options for this project so it's reproducible later
+# still need to implement this in a meaningful way
+save_project_config <- function(project_dir = getwd(),
+                                project_name,
+                                taxa_of_interest,
+                                regions_to_include = NULL,
+                                max_acc_per_taxa = NULL,
+                                min_region_requirement = NULL,
+                                my_lab_sequences = "",
+                                acc_to_exclude = NULL,
+                                organism_scope = if (exists("organism_scope", .GlobalEnv)) get("organism_scope", .GlobalEnv) else NULL,
+                                search_options = if (exists("search_options", .GlobalEnv)) get("search_options", .GlobalEnv) else NULL,
                                 ncbi_api_key_present = {
-                                  key <- get0("ncbi_api_key", .GlobalEnv, ifnotfound = Sys.getenv("NCBI_API_KEY"))
-                                  !is.null(key) && nzchar(key)
+                                  if (exists("ncbi_api_key", .GlobalEnv)) nzchar(get("ncbi_api_key", .GlobalEnv))
+                                  else nzchar(Sys.getenv("NCBI_API_KEY"))
                                 }) {
-  
-  if (!dir.exists(project_dir)) {
-    dir.create(project_dir, recursive = TRUE, showWarnings = FALSE)
-  }
   
   cfg <- list(
     project_name = project_name,
-    project_dir = normalize_dir(project_dir, mustWork = FALSE),
-    saved_at = as.character(Sys.time()),
+    saved_at     = as.character(Sys.time()),
     options = list(
-      taxa_of_interest = taxa_of_interest,
-      regions_to_include = regions_to_include,
-      max_acc_per_taxa = max_acc_per_taxa,
+      taxa_of_interest       = taxa_of_interest,
+      regions_to_include     = regions_to_include,
+      max_acc_per_taxa       = max_acc_per_taxa,
       min_region_requirement = min_region_requirement,
-      my_lab_sequences = my_lab_sequences,
-      acc_to_exclude = acc_to_exclude,
-      organism_scope = organism_scope,
-      search_include = search_include,
-      search_exclude = search_exclude,
-      ncbi_api_key_present = ncbi_api_key_present
+      my_lab_sequences       = my_lab_sequences,
+      acc_to_exclude         = acc_to_exclude,
+      organism_scope         = organism_scope,
+      search_options         = search_options,
+      ncbi_api_key_present   = ncbi_api_key_present
     )
   )
   
-  cfg_path <- file.path(project_dir, "config.yml")
-  yaml::write_yaml(cfg, cfg_path)
-  message("Saved project config: ", cfg_path)
+  if (!dir.exists(project_dir)) dir.create(project_dir, recursive = TRUE)
+  yaml::write_yaml(cfg, file.path(project_dir, "config.yml"))
+  message("Saved project config: ", file.path(project_dir, "config.yml"))
   invisible(cfg)
 }
 
-load_project_config <- function(project_dir = get0("project_dir", .GlobalEnv, ifnotfound = getwd())) {
-  cfg_path <- file.path(project_dir, "config.yml")
-  if (!file.exists(cfg_path)) {
-    stop("No config.yml found for project: ", cfg_path)
-  }
+# Load a project's config and return a named list (does not auto-assign)
+load_project_config <- function(projects_dir, project_name) {
+  cfg_path <- file.path(projects_dir, project_name, "config.yml")
+  if (!file.exists(cfg_path)) stop("No config.yml found for project: ", cfg_path)
   yaml::read_yaml(cfg_path)
-}
-
-restore_project_config <- function(project_dir = get0("project_dir", .GlobalEnv, ifnotfound = getwd()),
-                                   assign_to_global = TRUE) {
-  cfg <- load_project_config(project_dir = project_dir)
-  
-  if (assign_to_global) {
-    assign("project_name", cfg$project_name, envir = .GlobalEnv)
-    assign("project_dir", project_dir, envir = .GlobalEnv)
-    
-    if (!is.null(cfg$options)) {
-      for (nm in names(cfg$options)) {
-        assign(nm, cfg$options[[nm]], envir = .GlobalEnv)
-      }
-    }
-  }
-  
-  invisible(cfg)
-}
-
-project_paths <- function(project_dir = get0("project_dir", .GlobalEnv, ifnotfound = getwd())) {
-  list(
-    project_dir = project_dir,
-    metadata_files = file.path(project_dir, "metadata_files"),
-    intermediate_files = file.path(project_dir, "intermediate_files"),
-    logs = file.path(project_dir, "logs"),
-    plots = file.path(project_dir, "plots"),
-    tables = file.path(project_dir, "tables"),
-    accessions = file.path(project_dir, "accessions"),
-    config = file.path(project_dir, "config.yml")
-  )
 }
 
 # ============================================================
@@ -580,180 +450,542 @@ fetch_metadata_for_accession <- function(accession) {
 }
 
 # metadata retrieval
-retrieve_ncbi_metadata <- function(project_name) {
-  accession_list <- read.csv("./intermediate_files/all_pulled_accessions.csv", header = TRUE)
+retrieve_ncbi_metadata <- function(project_name,
+                                   resume = TRUE,
+                                   overwrite_checkpoints = FALSE,
+                                   checkpoint_dir = "./metadata_files/metadata_checkpoints") {
   
-  # Split by taxon if available, otherwise treat as a single group ("ALL")
+  accession_path <- "./intermediate_files/all_pulled_accessions.csv"
+  
+  if (!file.exists(accession_path)) {
+    stop("Accession list not found at: ", accession_path)
+  }
+  
+  if (!dir.exists("./metadata_files")) {
+    dir.create("./metadata_files", recursive = TRUE)
+  }
+  
+  if (!dir.exists(checkpoint_dir)) {
+    dir.create(checkpoint_dir, recursive = TRUE)
+  }
+  
+  accession_list <- read.csv(accession_path, header = TRUE, stringsAsFactors = FALSE)
+  
+  if (!"Accession" %in% names(accession_list)) {
+    stop("Accession list must contain an 'Accession' column.")
+  }
+  
   if ("genus" %in% names(accession_list)) {
     taxa_groups <- split(accession_list, accession_list$genus)
   } else {
     taxa_groups <- list(ALL = accession_list)
   }
   
-  metadata_database_list <- vector("list", length = nrow(accession_list))
-  fill_idx <- 1L
+  failed_path <- file.path(checkpoint_dir, "metadata_failed_accessions.csv")
+  timing_path <- "./intermediate_files/fetch_times_metadata_by_taxon.csv"
+  
+  failed_log <- data.frame(
+    Taxon = character(),
+    Accession = character(),
+    Error = character(),
+    Time = character(),
+    stringsAsFactors = FALSE
+  )
   
   timing_log <- data.frame(
     Taxon = character(),
     Num_accessions = integer(),
+    Num_successful = integer(),
+    Num_failed = integer(),
     Start_time = character(),
     End_time = character(),
     Elapsed_minutes = numeric(),
+    Checkpoint_file = character(),
     stringsAsFactors = FALSE
   )
   
   overall_start <- Sys.time()
-  cat("\nStarting metadata retrieval for", nrow(accession_list), "accessions across",
-      length(taxa_groups), "taxon group(s)...\n")
   
-  # Loop over taxa (genus) blocks,time each block
+  message(
+    "\nStarting metadata retrieval for ",
+    nrow(accession_list),
+    " accessions across ",
+    length(taxa_groups),
+    " taxon group(s)."
+  )
+  
   for (tx in names(taxa_groups)) {
-    block <- taxa_groups[[tx]]
-    taxon_start <- Sys.time()
-    cat(sprintf("\n--- %s: %d accession(s) ---\n", tx, nrow(block)))
     
-    # Process each accession in this taxon
+    safe_tx <- gsub("[^A-Za-z0-9_.-]+", "_", tx)
+    
+    checkpoint_path <- file.path(
+      checkpoint_dir,
+      paste0("metadata_", safe_tx, ".csv")
+    )
+    
+    block <- taxa_groups[[tx]]
+    
+    if (file.exists(checkpoint_path) && resume && !overwrite_checkpoints) {
+      message("\n--- Skipping ", tx, ": checkpoint already exists ---")
+      next
+    }
+    
+    if (file.exists(checkpoint_path) && overwrite_checkpoints) {
+      message("\n--- Overwriting existing checkpoint for ", tx, " ---")
+      file.remove(checkpoint_path)
+    }
+    
+    taxon_start <- Sys.time()
+    
+    message("\n--- ", tx, ": ", nrow(block), " accession(s) ---")
+    
+    metadata_rows <- list()
+    success_count <- 0L
+    fail_count <- 0L
+    
     for (i in seq_len(nrow(block))) {
+      
       acc <- block$Accession[i]
-      cat(sprintf("[%d/%d] %s ... ", i, nrow(block), acc))
-      tryCatch({
-        entry <- fetch_metadata_for_accession(acc)
-        metadata_database_list[[fill_idx]] <- entry
-        fill_idx <- fill_idx + 1L
+      
+      message("[", i, "/", nrow(block), "] ", acc, " ...")
+      
+      entry <- tryCatch(
+        {
+          fetch_metadata_for_accession(acc)
+        },
+        error = function(e) {
+          fail_count <<- fail_count + 1L
+          
+          failed_log <<- rbind(
+            failed_log,
+            data.frame(
+              Taxon = tx,
+              Accession = acc,
+              Error = conditionMessage(e),
+              Time = format(Sys.time(), "%Y-%m-%d %H:%M:%S"),
+              stringsAsFactors = FALSE
+            )
+          )
+          
+          message("  ERROR: ", conditionMessage(e))
+          NULL
+        }
+      )
+      
+      if (!is.null(entry)) {
+        success_count <- success_count + 1L
+        metadata_rows[[length(metadata_rows) + 1L]] <- entry
         
-        # metadata summary printout
-        cat("#", i,
-            "| Accession:", entry$Accession,
-            "| Species:", entry$organism,
-            "| Strain:", dplyr::coalesce(entry$strain, entry$specimen_voucher, entry$isolate, ""),
-            "| Isolation source:", entry$isolation_source,
-            "| Host:", entry$host, "\n")
-        
-        cat("done\n")
-        
-      }, error = function(e) {
-        cat("ERROR:", conditionMessage(e), "\n")
-      })
+        message(
+          "  OK | Species: ", entry$organism,
+          " | Strain: ",
+          dplyr::coalesce(entry$strain, entry$specimen_voucher, entry$isolate, ""),
+          " | Host: ", entry$host
+        )
+      }
+      
       Sys.sleep(get_sleep_duration())
+    }
+    
+    if (length(metadata_rows) > 0) {
+      taxon_metadata <- plyr::rbind.fill(metadata_rows)
+      write.csv(taxon_metadata, checkpoint_path, row.names = FALSE)
+      message("Checkpoint written: ", checkpoint_path)
+    } else {
+      warning("No metadata successfully retrieved for taxon: ", tx)
+    }
+    
+    if (nrow(failed_log) > 0) {
+      write.csv(failed_log, failed_path, row.names = FALSE)
+      message("Failed accession log written: ", failed_path)
     }
     
     taxon_end <- Sys.time()
     taxon_elapsed <- as.numeric(difftime(taxon_end, taxon_start, units = "mins"))
+    
     timing_log <- rbind(
       timing_log,
       data.frame(
         Taxon = tx,
         Num_accessions = nrow(block),
+        Num_successful = success_count,
+        Num_failed = fail_count,
         Start_time = format(taxon_start, "%Y-%m-%d %H:%M:%S"),
         End_time = format(taxon_end, "%Y-%m-%d %H:%M:%S"),
         Elapsed_minutes = round(taxon_elapsed, 2),
+        Checkpoint_file = checkpoint_path,
         stringsAsFactors = FALSE
       )
     )
-    cat(sprintf("%s completed in %.2f minutes\n", tx, taxon_elapsed))
+    
+    write.csv(timing_log, timing_path, row.names = FALSE)
+    
+    message(
+      tx,
+      " completed in ",
+      round(taxon_elapsed, 2),
+      " minutes. Successful: ",
+      success_count,
+      ". Failed: ",
+      fail_count,
+      "."
+    )
   }
+  
+  checkpoint_files <- list.files(
+    checkpoint_dir,
+    pattern = "^metadata_.*\\.csv$",
+    full.names = TRUE
+  )
+  
+  checkpoint_files <- checkpoint_files[
+    !grepl("metadata_failed_accessions\\.csv$", checkpoint_files)
+  ]
+  
+  if (length(checkpoint_files) == 0) {
+    stop("No checkpoint metadata files found in: ", checkpoint_dir)
+  }
+  
+  message("\nCombining ", length(checkpoint_files), " checkpoint file(s).")
+  
+  metadata_database <- plyr::rbind.fill(
+    lapply(checkpoint_files, function(x) {
+      read.csv(x, stringsAsFactors = FALSE)
+    })
+  )
+  
+  metadata_database <- metadata_database %>%
+    dplyr::distinct(Accession, .keep_all = TRUE)
+  
+  final_path <- paste0(
+    "./metadata_files/all_accessions_pulled_metadata_",
+    project_name,
+    ".csv"
+  )
+  
+  write.csv(metadata_database, final_path, row.names = FALSE)
   
   overall_end <- Sys.time()
   total_elapsed <- as.numeric(difftime(overall_end, overall_start, units = "mins"))
-  cat("\nAll metadata retrieved in", round(total_elapsed, 2), "minutes total.\n")
   
-  # Bind all non-NULL entries
-  metadata_database <- plyr::rbind.fill(Filter(Negate(is.null), metadata_database_list))
-  write.csv(
-    metadata_database,
-    paste0("./metadata_files/all_accessions_pulled_metadata_", project_name, ".csv"),
-    row.names = FALSE
-  )
-  cat("Metadata saved for project:", project_name, "\n")
-  
-  # Add a TOTAL row and write timing CSV
   timing_log <- rbind(
     timing_log,
     data.frame(
       Taxon = "TOTAL",
       Num_accessions = nrow(accession_list),
+      Num_successful = nrow(metadata_database),
+      Num_failed = if (file.exists(failed_path)) nrow(read.csv(failed_path)) else 0L,
       Start_time = format(overall_start, "%Y-%m-%d %H:%M:%S"),
       End_time = format(overall_end, "%Y-%m-%d %H:%M:%S"),
       Elapsed_minutes = round(total_elapsed, 2),
+      Checkpoint_file = final_path,
       stringsAsFactors = FALSE
     )
   )
-  write.csv(timing_log, "./intermediate_files/fetch_times_metadata_by_taxon.csv", row.names = FALSE)
-  cat("Timing log written to ./intermediate_files/fetch_times_metadata_by_taxon.csv\n")
+  
+  write.csv(timing_log, timing_path, row.names = FALSE)
+  
+  message("\nMetadata retrieval complete.")
+  message("Final metadata written to: ", final_path)
+  message("Timing log written to: ", timing_path)
+  
+  if (file.exists(failed_path)) {
+    message("Failed accession log written to: ", failed_path)
+  }
+  
+  invisible(metadata_database)
 }
 
 # Custom sequences merge
-merge_metadata_with_custom_file <- function(project_name) {
-  metadata_file_path <- paste0("./metadata_files/all_accessions_pulled_metadata_", project_name, ".csv")
-  metadata_database <- read.csv(metadata_file_path, header = TRUE)
+merge_metadata_with_custom_file <- function(project_name,
+                                            my_lab_sequences = get0("my_lab_sequences", envir = .GlobalEnv, ifnotfound = ""),
+                                            metadata_dir = "./metadata_files") {
+  metadata_file_path <- file.path(
+    metadata_dir,
+    paste0("all_accessions_pulled_metadata_", project_name, ".csv")
+  )
   
-  # if path is empty or missing, skip merge step
+  if (!file.exists(metadata_file_path)) {
+    stop("Metadata file not found: ", metadata_file_path)
+  }
+  
   if (is.null(my_lab_sequences) || !nzchar(my_lab_sequences)) {
-    cat("No custom sequences file provided; skipping merge.\n")
+    message("No custom sequences file provided; skipping custom sequence merge.")
     return(invisible(NULL))
   }
   
-  custom_sequences <- read.csv(my_lab_sequences, header = TRUE, fill = TRUE)
+  if (!file.exists(my_lab_sequences)) {
+    stop("Custom sequences file not found: ", my_lab_sequences)
+  }
   
-  if (!all(c("Accession","strain","sequence","organism","gene") %in% colnames(custom_sequences))) {
-    stop("Custom file must contain at least 'Accession', 'strain', 'sequence', 'organism', and 'gene' columns. If your sequences do not have accessions, you can simply use their strain name or other unique identifier.")
+  metadata_database <- read.csv(metadata_file_path, stringsAsFactors = FALSE)
+  custom_sequences  <- read.csv(my_lab_sequences, stringsAsFactors = FALSE, fill = TRUE)
+  
+  required_cols <- c("Accession", "strain", "sequence", "organism", "gene")
+  missing_required <- setdiff(required_cols, names(custom_sequences))
+  
+  if (length(missing_required) > 0) {
+    stop(
+      "Custom file is missing required column(s): ",
+      paste(missing_required, collapse = ", "),
+      "\nRequired columns are: ",
+      paste(required_cols, collapse = ", ")
+    )
+  }
+  
+  recommended_cols <- c(
+    "product",
+    "accession_title",
+    "host",
+    "isolation_source",
+    "GBSeq_taxonomy",
+    "Strain.taxonomy"
+  )
+  
+  for (col in recommended_cols) {
+    if (!col %in% names(custom_sequences)) {
+      custom_sequences[[col]] <- NA_character_
+    }
   }
   
   merged_data <- plyr::rbind.fill(metadata_database, custom_sequences)
+  
+  merged_data <- merged_data %>%
+    dplyr::distinct(Accession, .keep_all = TRUE)
+  
   write.csv(merged_data, metadata_file_path, row.names = FALSE)
-  cat("Merged custom sequences into:", metadata_file_path, "\n")
+  
+  message("Merged custom sequences into: ", metadata_file_path)
+  message("Custom rows added from: ", my_lab_sequences)
+  
+  invisible(merged_data)
 }
+
+# helper fucntion for strain taxonomy pull (part of basic curation)
+add_strain_taxonomy_columns_to_df <- function(meta, overwrite = TRUE) {
+  
+  trim_ws <- function(x) {
+    x <- as.character(x)
+    x <- gsub("^\\s+|\\s+$", "", x)
+    x[x == ""] <- NA_character_
+    x
+  }
+  
+  split_tax <- function(x) {
+    if (is.na(x) || x == "") return(character(0))
+    parts <- unlist(strsplit(x, ";"))
+    parts <- trim_ws(parts)
+    parts[!is.na(parts)]
+  }
+  
+  extract_rank <- function(parts, pattern) {
+    hit <- grep(pattern, parts, ignore.case = TRUE, value = TRUE)
+    if (length(hit) == 0) return(NA_character_)
+    hit[1]
+  }
+  
+  parse_genus_species_from_organism <- function(org) {
+    if (is.na(org) || org == "") {
+      return(list(genus = NA_character_, species = NA_character_))
+    }
+    
+    org <- trim_ws(org)
+    parts <- unlist(strsplit(org, "\\s+"))
+    
+    genus <- if (length(parts) >= 1) parts[1] else NA_character_
+    species <- NA_character_
+    
+    bad_species_terms <- c(
+      "sp.", "sp", "cf.", "cf", "aff.", "aff",
+      "nr.", "nr", "complex", "group"
+    )
+    
+    if (length(parts) >= 2 && !(tolower(parts[2]) %in% bad_species_terms)) {
+      species <- parts[2]
+    }
+    
+    list(genus = genus, species = species)
+  }
+  
+  get_tax_string <- function(i) {
+    candidates <- c("Strain.taxonomy", "GBSeq_taxonomy", "taxonomy")
+    
+    for (col in candidates) {
+      if (col %in% names(meta)) {
+        val <- trim_ws(meta[[col]][i])
+        if (!is.na(val) && val != "") return(val)
+      }
+    }
+    
+    NA_character_
+  }
+  
+  parsed <- lapply(seq_len(nrow(meta)), function(i) {
+    tax_string <- get_tax_string(i)
+    parts <- split_tax(tax_string)
+    
+    org <- if ("organism" %in% names(meta)) meta$organism[i] else NA_character_
+    org_parsed <- parse_genus_species_from_organism(org)
+    
+    phylum <- extract_rank(parts, "mycota$|mycotina$")
+    class  <- extract_rank(parts, "mycetes$")
+    order  <- extract_rank(parts, "ales$")
+    family <- extract_rank(parts, "aceae$")
+    
+    genus <- org_parsed$genus
+    if (is.na(genus) && length(parts) > 0) {
+      genus <- tail(parts, 1)
+    }
+    
+    species <- org_parsed$species
+    
+    data.frame(
+      Strain.taxonomy = tax_string,
+      Strain.phylum   = phylum,
+      Strain.class    = class,
+      Strain.order    = order,
+      Strain.family   = family,
+      Strain.genus    = genus,
+      Strain.species  = species,
+      stringsAsFactors = FALSE
+    )
+  })
+  
+  parsed_df <- do.call(rbind, parsed)
+  new_cols <- names(parsed_df)
+  
+  if (overwrite) {
+    meta <- meta[, setdiff(names(meta), new_cols), drop = FALSE]
+  }
+  
+  cbind(meta, parsed_df)
+}
+
 
 # Metadata curation and region selection
 curate_metadata_basic <- function(project_name,
-                                  taxa_of_interest = NULL) {
-  metadata_file_path <- paste0("./metadata_files/all_accessions_pulled_metadata_", project_name, ".csv")
-  accession_list <- read.csv(metadata_file_path, header = TRUE, stringsAsFactors = FALSE)
+                                  taxa_of_interest = NULL,
+                                  add_strain_taxonomy = TRUE,
+                                  overwrite_strain_taxonomy = TRUE) {
   
+  metadata_file_path <- paste0(
+    "./metadata_files/all_accessions_pulled_metadata_",
+    project_name,
+    ".csv"
+  )
+  
+  if (!file.exists(metadata_file_path)) {
+    stop("Metadata file not found at: ", metadata_file_path)
+  }
+  
+  accession_list <- read.csv(
+    metadata_file_path,
+    header = TRUE,
+    stringsAsFactors = FALSE
+  )
+  
+  # Ensure expected columns exist
   if (!"specimen_voucher" %in% names(accession_list)) accession_list$specimen_voucher <- NA_character_
   if (!"strain" %in% names(accession_list))           accession_list$strain           <- NA_character_
   if (!"isolate" %in% names(accession_list))          accession_list$isolate          <- NA_character_
   if (!"type_material" %in% names(accession_list))    accession_list$type_material    <- NA_character_
   if (!"geo_loc_name" %in% names(accession_list))     accession_list$geo_loc_name     <- NA_character_
+  if (!"organism" %in% names(accession_list))         accession_list$organism         <- NA_character_
+  if (!"Accession" %in% names(accession_list)) {
+    stop("Metadata file must contain an 'Accession' column.")
+  }
   
+  # Optional organism filtering
   if (!is.null(taxa_of_interest) && length(taxa_of_interest) > 0) {
     pat <- paste0("^(", paste(taxa_of_interest, collapse = "|"), ")\\b")
     accession_list <- accession_list[grepl(pat, accession_list$organism), ]
   }
   
-  # turn "" into NA
+  # Turn empty strings into NA for strain-name source columns
   name_cols <- c("specimen_voucher", "strain", "isolate")
   accession_list[name_cols] <- lapply(accession_list[name_cols], function(x) {
+    x <- as.character(x)
     x[x == ""] <- NA_character_
     x
   })
   
+  # Choose the best available strain-like identifier
   accession_list <- accession_list %>%
-    dplyr::mutate(strain.standard = dplyr::coalesce(specimen_voucher, strain, isolate, Accession))
+    dplyr::mutate(
+      strain.standard = dplyr::coalesce(
+        specimen_voucher,
+        strain,
+        isolate,
+        Accession
+      )
+    )
   
+  # Clean strain names for safe FASTA headers / plotting labels
   remove_char_pattern <- "[><\\s:;_\\-\\.()&|#/\\\\,'\"!?\\[\\]{}+=%\\*\\^~@$]"
+  
   accession_list$strain.standard <- stringr::str_remove_all(
     accession_list$strain.standard,
     remove_char_pattern
   )
   
+  # Add TYPE suffix when type material is present
   accession_list$strain.standard.type <- ifelse(
     !is.na(accession_list$type_material) & accession_list$type_material != "",
     paste0(accession_list$strain.standard, ".TYPE"),
     accession_list$strain.standard
   )
   
+  # Dot-separated organism name for FASTA headers
   accession_list$org_name <- gsub("\\s+", "\\.", accession_list$organism)
+  
+  # Add Strain.taxonomy and parsed Strain.* taxonomy columns
+  if (add_strain_taxonomy) {
+    accession_list <- add_strain_taxonomy_columns_to_df(
+      accession_list,
+      overwrite = overwrite_strain_taxonomy
+    )
+  }
+  
+  out_path <- paste0(
+    "./metadata_files/all_accessions_pulled_metadata_",
+    project_name,
+    "_curated.csv"
+  )
   
   write.csv(
     accession_list,
-    paste0("./metadata_files/all_accessions_pulled_metadata_", project_name, "_curated.csv"),
+    out_path,
     row.names = FALSE
   )
-  cat("Wrote basic curated metadata.\n")
+  
+  cat("Wrote basic curated metadata to:", out_path, "\n")
+  
+  if (add_strain_taxonomy) {
+    cat("Added/updated Strain.taxonomy and parsed Strain.* taxonomy columns.\n")
+  }
+  
+  invisible(accession_list)
 }
 
+# for legacy projects where I didn't have strain taxonomy lookup implemented yet
+add_strain_taxonomy_columns <- function(metadata_file, overwrite = TRUE) {
+  if (!file.exists(metadata_file)) {
+    stop("Metadata file not found: ", metadata_file)
+  }
 
+  meta <- read.csv(metadata_file, stringsAsFactors = FALSE)
+
+  meta <- add_strain_taxonomy_columns_to_df(
+    meta,
+    overwrite = overwrite
+  )
+
+  write.csv(meta, metadata_file, row.names = FALSE)
+
+  message("Added/updated fungal taxonomy columns in: ", metadata_file)
+
+  invisible(meta)
+}
 
 
 # ============================================================
@@ -874,6 +1106,67 @@ prepare_host_terms <- function(
 
 
 
+# to count the number of accessions per failed term
+add_failed_host_term_counts <- function(failed_df,
+                                        project_name,
+                                        metadata_dir = "./metadata_files") {
+  metadata_path <- file.path(
+    metadata_dir,
+    paste0("all_accessions_pulled_metadata_", project_name, "_curated.csv")
+  )
+  
+  if (!file.exists(metadata_path)) {
+    warning("Cannot add failed host term counts; metadata file not found: ", metadata_path)
+    failed_df$accession_count <- NA_integer_
+    return(failed_df)
+  }
+  
+  meta <- read.csv(metadata_path, stringsAsFactors = FALSE)
+  
+  if (!"host.standardized" %in% names(meta)) {
+    warning("Cannot add failed host term counts; metadata is missing host.standardized.")
+    failed_df$accession_count <- NA_integer_
+    return(failed_df)
+  }
+  
+  # If Accession exists, count unique accessions.
+  # Otherwise, fall back to row counts.
+  if ("Accession" %in% names(meta)) {
+    count_df <- meta %>%
+      dplyr::filter(!is.na(host.standardized) & host.standardized != "") %>%
+      dplyr::group_by(host.standardized) %>%
+      dplyr::summarise(
+        accession_count = dplyr::n_distinct(Accession),
+        .groups = "drop"
+      )
+  } else {
+    count_df <- meta %>%
+      dplyr::filter(!is.na(host.standardized) & host.standardized != "") %>%
+      dplyr::count(host.standardized, name = "accession_count")
+  }
+  
+  failed_df <- failed_df %>%
+    dplyr::select(-dplyr::any_of("accession_count")) %>%
+    dplyr::left_join(
+      count_df,
+      by = c("original_term" = "host.standardized")
+    ) %>%
+    dplyr::mutate(
+      accession_count = dplyr::if_else(
+        is.na(accession_count),
+        0L,
+        as.integer(accession_count)
+      )
+    ) %>%
+    dplyr::arrange(
+      dplyr::desc(accession_count),
+      original_term
+    )
+  
+  failed_df
+}
+
+
 run_host_taxonomy_lookup <- function(
     project_name,
     host_dir = "./host_assessment",
@@ -959,6 +1252,13 @@ run_host_taxonomy_lookup <- function(
     # still show unresolved failed terms if any
     if (file.exists(failed_path)) {
       failed_df <- read.csv(failed_path, stringsAsFactors = FALSE)
+      
+      failed_df <- add_failed_host_term_counts(
+        failed_df,
+        project_name = project_name
+      )
+      
+      write.csv(failed_df, failed_path, row.names = FALSE)
       unresolved <- subset(failed_df,
                            is.na(replacement_term) | replacement_term == "")
       message("Unresolved failed terms in mapping file: ", nrow(unresolved))
@@ -1082,6 +1382,12 @@ run_host_taxonomy_lookup <- function(
       )
     }
   }
+  
+  # Add accession counts and sort by importance
+  failed_df <- add_failed_host_term_counts(
+    failed_df,
+    project_name = project_name
+  )
   
   # Write failed terms mapping
   write.csv(failed_df, failed_path, row.names = FALSE)
@@ -1311,24 +1617,24 @@ summarize_host_usage <- function(
     fungal_rank = "species",
     host_rank   = "phylum",
     keep_NAs    = FALSE,
-    host_dir    = "./host_assessment"
+    host_dir    = "./host_assessment",
+    metadata_file = NULL
 ) {
   if (!dir.exists(host_dir)) dir.create(host_dir, recursive = TRUE)
   
-  meta_path <- paste0(
-    "./metadata_files/all_accessions_pulled_metadata_",
-    project_name,
-    "_curated.csv"
-  )
-  
-  if (!file.exists(meta_path)) {
-    stop(
-      "Curated metadata file not found at: ", meta_path,
-      "\nRun curate_metadata_basic() and merge_host_taxonomy_into_metadata() first."
+  if (is.null(metadata_file)) {
+    metadata_file <- paste0(
+      "./metadata_files/all_accessions_pulled_metadata_",
+      project_name,
+      "_curated.csv"
     )
   }
   
-  meta <- read.csv(meta_path, stringsAsFactors = FALSE)
+  if (!file.exists(metadata_file)) {
+    stop("Metadata file not found at: ", metadata_file)
+  }
+  
+  meta <- read.csv(metadata_file, stringsAsFactors = FALSE)
   
   fungal_col <- paste0("Strain.", fungal_rank)
   host_col   <- paste0("Host.", host_rank)
@@ -1397,7 +1703,6 @@ summarize_host_usage <- function(
     )
   
   names(counts_wide)[1] <- fungal_col
-  
   host_cols <- setdiff(names(counts_wide), fungal_col)
   
   counts_wide <- counts_wide %>%
@@ -1464,6 +1769,10 @@ summarize_host_usage <- function(
   write.csv(result, out_path, row.names = FALSE)
   
   message("Host usage summary written to: ", out_path)
+  message("Metadata source: ", metadata_file)
+  message("Rows in metadata: ", nrow(meta))
+  message("Rows used after filtering: ", nrow(df))
+  
   invisible(result)
 }
 
@@ -1472,56 +1781,896 @@ summarize_host_usage <- function(
 ##############################
 
 # first pass only
-run_host_assessment_initial_pass <- function(project_name,
-                                             use_isolation_source = TRUE,
-                                             overwrite_host_standardized = TRUE) {
-  # 1) Initialize or refresh host.standardized in the curated metadata
-  initialize_host_standardized(
-    project_name          = project_name,
-    use_isolation_source  = use_isolation_source,
-    overwrite             = overwrite_host_standardized
+# -----------------------------
+# Host assessment helpers
+# -----------------------------
+
+.host_metadata_path <- function(project_name) {
+  file.path(
+    "metadata_files",
+    paste0("all_accessions_pulled_metadata_", project_name, "_curated.csv")
   )
-  # 2) Build the unique host term list from host.standardized
-  prepare_host_terms(project_name)
-  # 3) Run the first taxonomy lookup pass
-  run_host_taxonomy_lookup(project_name)
-  invisible(TRUE)
 }
 
-# Host assessment refinement wrapper
-run_host_assessment_refinement_pass <- function(project_name) {
-  message("Applying updated host standardization mapping...")
-  apply_host_standardization_mapping(project_name)
-  
-  message("Rebuilding unique host term list from host.standardized...")
-  prepare_host_terms(project_name)
-  
-  message("Running host taxonomy lookup for newly standardized terms...")
-  run_host_taxonomy_lookup(project_name)
-  
-  message("Refinement pass complete.")
-  invisible(TRUE)
+.host_taxonomy_path <- function(project_name, host_dir = "./host_assessment") {
+  file.path(host_dir, paste0("host_taxonomy_", project_name, ".csv"))
 }
+
+.host_failed_path <- function(project_name, host_dir = "./host_assessment") {
+  file.path(host_dir, paste0("host_failed_terms_", project_name, ".csv"))
+}
+
+.host_is_blank <- function(x) {
+  is.na(x) | trimws(as.character(x)) == ""
+}
+
+.host_is_invalid_tax_term <- function(x) {
+  .host_is_blank(x) | toupper(trimws(as.character(x))) == "NA"
+}
+
+.host_clean_term <- function(x) {
+  x <- trimws(as.character(x))
+  x[is.na(x)] <- ""
+  x
+}
+
+.host_display_term <- function(x) {
+  x <- .host_clean_term(x)
+  ifelse(x == "" | toupper(x) == "NA", "NA", x)
+}
+
+.host_taxonomy_cols <- function() {
+  c(
+    "Host.standardized",
+    "Host.kingdom",
+    "Host.phylum",
+    "Host.class",
+    "Host.order",
+    "Host.family",
+    "Host.genus",
+    "Host.species"
+  )
+}
+
+.empty_host_taxonomy <- function() {
+  cols <- .host_taxonomy_cols()
+  
+  as.data.frame(
+    setNames(
+      replicate(length(cols), character(0), simplify = FALSE),
+      cols
+    ),
+    stringsAsFactors = FALSE
+  )
+}
+
+.is_valid_tax_table <- function(x) {
+  is.data.frame(x) &&
+    nrow(x) > 0 &&
+    all(c("name", "rank") %in% names(x))
+}
+
+.ensure_failed_columns <- function(failed_df) {
+  required_cols <- c(
+    "original_term",
+    "replacement_term",
+    "accession_count",
+    "term_type",
+    "parent_original_term",
+    "lookup_status",
+    "replacement_lookup_status",
+    "notes"
+  )
+  
+  for (col in required_cols) {
+    if (!col %in% names(failed_df)) {
+      failed_df[[col]] <- NA_character_
+    }
+  }
+  
+  failed_df <- failed_df[, required_cols, drop = FALSE]
+  
+  failed_df$original_term <- .host_display_term(failed_df$original_term)
+  failed_df$replacement_term <- .host_clean_term(failed_df$replacement_term)
+  failed_df$parent_original_term <- .host_clean_term(failed_df$parent_original_term)
+  
+  failed_df
+}
+
+.read_failed_terms <- function(project_name, host_dir = "./host_assessment") {
+  failed_path <- .host_failed_path(project_name, host_dir)
+  
+  if (file.exists(failed_path)) {
+    failed_df <- read.csv(failed_path, stringsAsFactors = FALSE)
+  } else {
+    failed_df <- data.frame(
+      original_term = character(0),
+      replacement_term = character(0),
+      stringsAsFactors = FALSE
+    )
+  }
+  
+  .ensure_failed_columns(failed_df)
+}
+
+.write_failed_terms <- function(failed_df, project_name, host_dir = "./host_assessment") {
+  failed_path <- .host_failed_path(project_name, host_dir)
+  failed_df <- .ensure_failed_columns(failed_df)
+  
+  write.csv(failed_df, failed_path, row.names = FALSE)
+  message("Failed terms file written to: ", failed_path)
+  
+  invisible(failed_df)
+}
+
+.read_host_taxonomy <- function(project_name, host_dir = "./host_assessment") {
+  taxonomy_path <- .host_taxonomy_path(project_name, host_dir)
+  taxonomy_cols <- .host_taxonomy_cols()
+  
+  if (file.exists(taxonomy_path)) {
+    host_taxonomy <- read.csv(taxonomy_path, stringsAsFactors = FALSE)
+    
+    if (!"Host.standardized" %in% names(host_taxonomy)) {
+      if ("Host.standard" %in% names(host_taxonomy)) {
+        message("Detected legacy taxonomy file. Renaming 'Host.standard' to 'Host.standardized'.")
+        names(host_taxonomy)[names(host_taxonomy) == "Host.standard"] <- "Host.standardized"
+      } else {
+        stop(
+          "Existing host taxonomy file is missing 'Host.standardized': ",
+          taxonomy_path
+        )
+      }
+    }
+    
+    for (col in taxonomy_cols) {
+      if (!col %in% names(host_taxonomy)) {
+        host_taxonomy[[col]] <- NA_character_
+      }
+    }
+    
+    host_taxonomy <- host_taxonomy[, taxonomy_cols, drop = FALSE]
+  } else {
+    host_taxonomy <- .empty_host_taxonomy()
+  }
+  
+  host_taxonomy$Host.standardized <- .host_clean_term(host_taxonomy$Host.standardized)
+  
+  host_taxonomy
+}
+
+.write_host_taxonomy <- function(host_taxonomy, project_name, host_dir = "./host_assessment") {
+  taxonomy_path <- .host_taxonomy_path(project_name, host_dir)
+  taxonomy_cols <- .host_taxonomy_cols()
+  
+  for (col in taxonomy_cols) {
+    if (!col %in% names(host_taxonomy)) {
+      host_taxonomy[[col]] <- NA_character_
+    }
+  }
+  
+  host_taxonomy <- host_taxonomy[, taxonomy_cols, drop = FALSE]
+  host_taxonomy <- host_taxonomy[!duplicated(host_taxonomy$Host.standardized), ]
+  
+  write.csv(host_taxonomy, taxonomy_path, row.names = FALSE)
+  message("Host taxonomy file written to: ", taxonomy_path)
+  
+  invisible(host_taxonomy)
+}
+
+.ensure_host_standardized <- function(
+    meta,
+    use_isolation_source = FALSE,
+    overwrite_host_standardized = FALSE
+) {
+  
+  host_cols <- c(
+    "host",
+    "Host",
+    "host.name",
+    "host_name",
+    "host.scientific_name",
+    "host.scientific.name",
+    "host.standard",
+    "Host.standard"
+  )
+  
+  isolation_cols <- c(
+    "isolation_source",
+    "Isolation Source",
+    "isolation.source",
+    "isolation-source",
+    "source_material"
+  )
+  
+  host_cols <- host_cols[host_cols %in% names(meta)]
+  isolation_cols <- isolation_cols[isolation_cols %in% names(meta)]
+  
+  if (!"host.standardized" %in% names(meta) || overwrite_host_standardized) {
+    
+    if (length(host_cols) == 0 && (!use_isolation_source || length(isolation_cols) == 0)) {
+      stop(
+        "Could not create 'host.standardized'. No usable host column found",
+        if (use_isolation_source) " and no usable isolation source column found." else ".",
+        "\nAvailable columns are:\n",
+        paste(names(meta), collapse = ", ")
+      )
+    }
+    
+    meta$host.standardized <- NA_character_
+    
+    if (length(host_cols) > 0) {
+      host_source <- host_cols[1]
+      message("Creating host.standardized from host column: ", host_source)
+      meta$host.standardized <- meta[[host_source]]
+    }
+    
+    if (use_isolation_source && length(isolation_cols) > 0) {
+      isolation_source <- isolation_cols[1]
+      message(
+        "Using isolation source column as fallback where host information is missing: ",
+        isolation_source
+      )
+      
+      missing_host <- .host_is_invalid_tax_term(meta$host.standardized)
+      
+      meta$host.standardized[missing_host] <- meta[[isolation_source]][missing_host]
+    }
+    
+  } else {
+    message("Using existing host.standardized column.")
+  }
+  
+  meta$host.standardized <- .host_clean_term(meta$host.standardized)
+  
+  if (!"host.standardized.original" %in% names(meta) || overwrite_host_standardized) {
+    meta$host.standardized.original <- meta$host.standardized
+  }
+  
+  meta
+}
+
+.count_host_terms <- function(meta) {
+  meta <- .ensure_host_standardized(meta)
+  
+  terms <- .host_display_term(meta$host.standardized.original)
+  
+  as.data.frame(table(terms), stringsAsFactors = FALSE) |>
+    stats::setNames(c("original_term", "accession_count"))
+}
+
+.add_failed_host_term_counts <- function(failed_df, project_name, metadata_file = NULL) {
+  if (is.null(metadata_file)) {
+    metadata_file <- .host_metadata_path(project_name)
+  }
+  
+  if (!file.exists(metadata_file)) {
+    warning("Metadata file not found while adding failed-term counts: ", metadata_file)
+    return(failed_df)
+  }
+  
+  meta <- read.csv(metadata_file, stringsAsFactors = FALSE)
+  counts <- .count_host_terms(meta)
+  
+  failed_df <- .ensure_failed_columns(failed_df)
+  
+  failed_df$accession_count <- counts$accession_count[
+    match(failed_df$original_term, counts$original_term)
+  ]
+  
+  failed_df$accession_count[is.na(failed_df$accession_count)] <- 0L
+  
+  failed_df
+}
+
+.lookup_one_host_taxonomy <- function(term, db = "ncbi") {
+  ranks_of_interest <- c(
+    "kingdom", "phylum", "class",
+    "order", "family", "genus", "species"
+  )
+  
+  res_list <- tryCatch(
+    {
+      taxize::classification(term, db = db)
+    },
+    error = function(e) {
+      NULL
+    }
+  )
+  
+  if (is.null(res_list) || length(res_list) == 0 || is.atomic(res_list)) {
+    return(NULL)
+  }
+  
+  res <- res_list[[1]]
+  
+  if (!.is_valid_tax_table(res)) {
+    return(NULL)
+  }
+  
+  this_row <- setNames(
+    as.list(rep(NA_character_, length(ranks_of_interest))),
+    paste0("Host.", ranks_of_interest)
+  )
+  
+  for (rk in ranks_of_interest) {
+    hit <- res$name[res$rank == rk]
+    
+    if (length(hit) > 0) {
+      this_row[[paste0("Host.", rk)]] <- hit[1]
+    }
+  }
+  
+  df_row <- data.frame(
+    Host.standardized = term,
+    as.data.frame(this_row, stringsAsFactors = FALSE),
+    stringsAsFactors = FALSE
+  )
+  
+  df_row[, .host_taxonomy_cols(), drop = FALSE]
+}
+
+.append_failed_terms <- function(
+    failed_df,
+    terms,
+    term_type = "initial_lookup",
+    parent_original_term = NA_character_,
+    lookup_status = "failed"
+) {
+  failed_df <- .ensure_failed_columns(failed_df)
+  
+  terms <- unique(.host_display_term(terms))
+  terms <- terms[!is.na(terms) & terms != ""]
+  
+  for (term in terms) {
+    already_present <- term %in% failed_df$original_term
+    
+    if (!already_present) {
+      failed_df <- rbind(
+        failed_df,
+        data.frame(
+          original_term = term,
+          replacement_term = NA_character_,
+          accession_count = NA_character_,
+          term_type = term_type,
+          parent_original_term = parent_original_term,
+          lookup_status = lookup_status,
+          replacement_lookup_status = NA_character_,
+          notes = NA_character_,
+          stringsAsFactors = FALSE
+        )
+      )
+    }
+  }
+  
+  .ensure_failed_columns(failed_df)
+}
+
+.search_host_terms <- function(
+    terms,
+    project_name,
+    host_dir = "./host_assessment",
+    db = "ncbi",
+    sleep_sec = 0.1,
+    overwrite = FALSE,
+    term_type = "initial_lookup",
+    parent_map = NULL
+) {
+  if (!dir.exists(host_dir)) dir.create(host_dir, recursive = TRUE)
+  
+  host_taxonomy <- .read_host_taxonomy(project_name, host_dir)
+  failed_df <- .read_failed_terms(project_name, host_dir)
+  
+  terms <- unique(.host_clean_term(terms))
+  terms <- terms[!is.na(terms)]
+  
+  invalid_terms <- terms[.host_is_invalid_tax_term(terms)]
+  valid_terms <- terms[!.host_is_invalid_tax_term(terms)]
+  
+  if (length(invalid_terms) > 0) {
+    failed_df <- .append_failed_terms(
+      failed_df,
+      invalid_terms,
+      term_type = term_type,
+      lookup_status = "not_searched_invalid"
+    )
+  }
+  
+  already_done <- unique(.host_clean_term(host_taxonomy$Host.standardized))
+  
+  if (!overwrite) {
+    valid_terms <- setdiff(valid_terms, already_done)
+  }
+  
+  if (length(valid_terms) == 0) {
+    message("No new valid host terms to query.")
+    .write_failed_terms(
+      .add_failed_host_term_counts(failed_df, project_name),
+      project_name,
+      host_dir
+    )
+    return(invisible(list(
+      taxonomy = host_taxonomy,
+      failed_table = failed_df,
+      newly_failed = character(0),
+      newly_successful = character(0)
+    )))
+  }
+  
+  message("Host taxonomy lookup starting for ", length(valid_terms), " terms.")
+  
+  successful_rows <- list()
+  failed_terms <- character(0)
+  
+  for (term in valid_terms) {
+    message("  Querying: ", term)
+    
+    df_row <- .lookup_one_host_taxonomy(term, db = db)
+    
+    if (is.null(df_row)) {
+      message("    FAILED")
+      failed_terms <- c(failed_terms, term)
+    } else {
+      message("    OK")
+      successful_rows[[length(successful_rows) + 1L]] <- df_row
+    }
+    
+    Sys.sleep(sleep_sec)
+  }
+  
+  if (length(successful_rows) > 0) {
+    new_tax_rows <- dplyr::bind_rows(successful_rows)
+    
+    if (overwrite) {
+      host_taxonomy <- host_taxonomy[
+        !host_taxonomy$Host.standardized %in% new_tax_rows$Host.standardized,
+        ,
+        drop = FALSE
+      ]
+    }
+    
+    host_taxonomy <- dplyr::bind_rows(host_taxonomy, new_tax_rows)
+    host_taxonomy <- host_taxonomy[!duplicated(host_taxonomy$Host.standardized), ]
+  }
+  
+  if (length(failed_terms) > 0) {
+    failed_df <- .append_failed_terms(
+      failed_df,
+      failed_terms,
+      term_type = term_type,
+      lookup_status = "failed"
+    )
+  }
+  
+  failed_df <- .add_failed_host_term_counts(failed_df, project_name)
+  
+  .write_host_taxonomy(host_taxonomy, project_name, host_dir)
+  .write_failed_terms(failed_df, project_name, host_dir)
+  
+  invisible(list(
+    taxonomy = host_taxonomy,
+    failed_table = failed_df,
+    newly_failed = unique(failed_terms),
+    newly_successful = if (length(successful_rows) > 0) {
+      unique(dplyr::bind_rows(successful_rows)$Host.standardized)
+    } else {
+      character(0)
+    }
+  ))
+}
+
+
+# -----------------------------
+# Merge taxonomy into metadata
+# -----------------------------
+
+merge_host_taxonomy_into_metadata <- function(
+    project_name,
+    host_dir = "./host_assessment",
+    metadata_file = NULL
+) {
+  if (is.null(metadata_file)) {
+    metadata_file <- .host_metadata_path(project_name)
+  }
+  
+  if (!file.exists(metadata_file)) {
+    stop("Metadata file not found: ", metadata_file)
+  }
+  
+  taxonomy_path <- .host_taxonomy_path(project_name, host_dir)
+  
+  if (!file.exists(taxonomy_path)) {
+    stop("Host taxonomy file not found: ", taxonomy_path)
+  }
+  
+  meta <- read.csv(metadata_file, stringsAsFactors = FALSE)
+  meta <- .ensure_host_standardized(meta)
+  
+  host_taxonomy <- .read_host_taxonomy(project_name, host_dir)
+  
+  taxonomy_cols <- .host_taxonomy_cols()
+  taxonomy_value_cols <- setdiff(taxonomy_cols, "Host.standardized")
+  
+  for (col in taxonomy_value_cols) {
+    if (col %in% names(meta)) {
+      meta[[col]] <- NULL
+    }
+  }
+  
+  match_idx <- match(meta$host.standardized, host_taxonomy$Host.standardized)
+  
+  for (col in taxonomy_value_cols) {
+    meta[[col]] <- host_taxonomy[[col]][match_idx]
+  }
+  
+  write.csv(meta, metadata_file, row.names = FALSE)
+  
+  message("Host taxonomy merged into metadata: ", metadata_file)
+  
+  invisible(meta)
+}
+
+
+# -----------------------------
+# Initial pass
+# -----------------------------
+
+run_host_assessment_initial_pass <- function(
+    project_name,
+    host_dir = "./host_assessment",
+    db = "ncbi",
+    sleep_sec = 0.1,
+    overwrite = FALSE,
+    metadata_file = NULL,
+    use_isolation_source = FALSE,
+    overwrite_host_standardized = FALSE
+) {
+  if (!dir.exists(host_dir)) dir.create(host_dir, recursive = TRUE)
+  
+  if (is.null(metadata_file)) {
+    metadata_file <- .host_metadata_path(project_name)
+  }
+  
+  if (!file.exists(metadata_file)) {
+    stop("Metadata file not found: ", metadata_file)
+  }
+  
+  message("Running host assessment initial pass...")
+  
+  meta <- read.csv(metadata_file, stringsAsFactors = FALSE)
+  
+  meta <- .ensure_host_standardized(
+    meta,
+    use_isolation_source = use_isolation_source,
+    overwrite_host_standardized = overwrite_host_standardized
+  )
+  
+  write.csv(meta, metadata_file, row.names = FALSE)
+  
+  host_terms <- unique(.host_clean_term(meta$host.standardized))
+  
+  terms_path <- file.path(
+    host_dir,
+    paste0("host_terms_for_taxonomy_", project_name, ".csv")
+  )
+  
+  write.csv(
+    data.frame(host = host_terms, stringsAsFactors = FALSE),
+    terms_path,
+    row.names = FALSE
+  )
+  
+  message("Host terms file written to: ", terms_path)
+  
+  lookup_result <- .search_host_terms(
+    terms = host_terms,
+    project_name = project_name,
+    host_dir = host_dir,
+    db = db,
+    sleep_sec = sleep_sec,
+    overwrite = overwrite,
+    term_type = "initial_lookup"
+  )
+  
+  merge_host_taxonomy_into_metadata(
+    project_name = project_name,
+    host_dir = host_dir,
+    metadata_file = metadata_file
+  )
+  
+  message("Initial host assessment pass completed.")
+  
+  invisible(lookup_result)
+}
+
+# -----------------------------
+# Refinement pass
+# -----------------------------
+
+.has_usable_host_taxonomy <- function(host_taxonomy) {
+  rank_cols <- c(
+    "Host.kingdom",
+    "Host.phylum",
+    "Host.class",
+    "Host.order",
+    "Host.family",
+    "Host.genus",
+    "Host.species"
+  )
+  
+  rank_cols <- rank_cols[rank_cols %in% names(host_taxonomy)]
+  
+  if (length(rank_cols) == 0) {
+    return(rep(FALSE, nrow(host_taxonomy)))
+  }
+  
+  apply(
+    host_taxonomy[, rank_cols, drop = FALSE],
+    1,
+    function(x) any(!is.na(x) & trimws(as.character(x)) != "")
+  )
+}
+
+run_host_assessment_refinement_pass <- function(
+    project_name,
+    host_dir = "./host_assessment",
+    db = "ncbi",
+    sleep_sec = 0.1,
+    overwrite = FALSE,
+    metadata_file = NULL
+) {
+  if (!dir.exists(host_dir)) dir.create(host_dir, recursive = TRUE)
+  
+  if (is.null(metadata_file)) {
+    metadata_file <- .host_metadata_path(project_name)
+  }
+  
+  if (!file.exists(metadata_file)) {
+    stop("Metadata file not found: ", metadata_file)
+  }
+  
+  failed_path <- .host_failed_path(project_name, host_dir)
+  
+  if (!file.exists(failed_path)) {
+    stop(
+      "Failed terms file not found: ", failed_path,
+      "\nRun run_host_assessment_initial_pass() first."
+    )
+  }
+  
+  message("Running host assessment refinement pass...")
+  
+  failed_df <- .read_failed_terms(project_name, host_dir)
+  host_taxonomy <- .read_host_taxonomy(project_name, host_dir)
+  
+  replacement_ok <- !.host_is_invalid_tax_term(failed_df$replacement_term)
+  replacement_rows <- failed_df[replacement_ok, , drop = FALSE]
+  
+  if (nrow(replacement_rows) == 0) {
+    message("No replacement terms supplied yet. Nothing to refine.")
+    
+    failed_df <- .add_failed_host_term_counts(failed_df, project_name, metadata_file)
+    .write_failed_terms(failed_df, project_name, host_dir)
+    
+    merge_host_taxonomy_into_metadata(
+      project_name = project_name,
+      host_dir = host_dir,
+      metadata_file = metadata_file
+    )
+    
+    return(invisible(list(
+      taxonomy = host_taxonomy,
+      failed_table = failed_df
+    )))
+  }
+  
+  replacement_terms <- unique(.host_clean_term(replacement_rows$replacement_term))
+  replacement_terms <- replacement_terms[!.host_is_invalid_tax_term(replacement_terms)]
+  
+  usable_taxonomy_rows <- .has_usable_host_taxonomy(host_taxonomy)
+  
+  already_have_taxonomy <- unique(
+    .host_clean_term(host_taxonomy$Host.standardized[usable_taxonomy_rows])
+  )
+  
+  if (overwrite) {
+    terms_to_query <- replacement_terms
+  } else {
+    terms_to_query <- setdiff(replacement_terms, already_have_taxonomy)
+  }
+  
+  message("Replacement terms supplied: ", length(replacement_terms))
+  message("Replacement terms already have usable taxonomy: ", length(intersect(replacement_terms, already_have_taxonomy)))
+  message("Replacement terms to query this pass: ", length(terms_to_query))
+  
+  if (length(terms_to_query) > 0) {
+    lookup_result <- .search_host_terms(
+      terms = terms_to_query,
+      project_name = project_name,
+      host_dir = host_dir,
+      db = db,
+      sleep_sec = sleep_sec,
+      overwrite = overwrite,
+      term_type = "replacement_lookup"
+    )
+  } else {
+    lookup_result <- list(
+      taxonomy = host_taxonomy,
+      failed_table = failed_df,
+      newly_failed = character(0),
+      newly_successful = character(0)
+    )
+  }
+  
+  host_taxonomy <- .read_host_taxonomy(project_name, host_dir)
+  
+  usable_taxonomy_rows <- .has_usable_host_taxonomy(host_taxonomy)
+  
+  successful_taxonomy_terms <- unique(
+    .host_clean_term(host_taxonomy$Host.standardized[usable_taxonomy_rows])
+  )
+  
+  meta <- read.csv(metadata_file, stringsAsFactors = FALSE)
+  meta <- .ensure_host_standardized(meta)
+  
+  if (!"host.standardized.before_refinement" %in% names(meta)) {
+    meta$host.standardized.before_refinement <- meta$host.standardized
+  }
+  
+  message("Applying successful replacement terms to metadata...")
+  
+  for (i in seq_len(nrow(replacement_rows))) {
+    original <- .host_display_term(replacement_rows$original_term[i])
+    replacement <- .host_clean_term(replacement_rows$replacement_term[i])
+    
+    if (.host_is_invalid_tax_term(replacement)) {
+      next
+    }
+    
+    replacement_has_taxonomy <- replacement %in% successful_taxonomy_terms
+    
+    if (!replacement_has_taxonomy) {
+      next
+    }
+    
+    if (original == "NA") {
+      idx <- .host_is_invalid_tax_term(meta$host.standardized)
+    } else {
+      idx <- .host_display_term(meta$host.standardized) == original |
+        .host_display_term(meta$host.standardized.original) == original
+    }
+    
+    if (any(idx, na.rm = TRUE)) {
+      meta$host.standardized[idx] <- replacement
+    }
+  }
+  
+  write.csv(meta, metadata_file, row.names = FALSE)
+  
+  failed_df <- .read_failed_terms(project_name, host_dir)
+  host_taxonomy <- .read_host_taxonomy(project_name, host_dir)
+  
+  usable_taxonomy_rows <- .has_usable_host_taxonomy(host_taxonomy)
+  
+  successful_taxonomy_terms <- unique(
+    .host_clean_term(host_taxonomy$Host.standardized[usable_taxonomy_rows])
+  )
+  
+  replacement_terms <- unique(.host_clean_term(failed_df$replacement_term))
+  replacement_terms <- replacement_terms[!.host_is_invalid_tax_term(replacement_terms)]
+  
+  for (i in seq_len(nrow(failed_df))) {
+    replacement <- .host_clean_term(failed_df$replacement_term[i])
+    
+    if (.host_is_invalid_tax_term(replacement)) {
+      next
+    }
+    
+    if (replacement %in% successful_taxonomy_terms) {
+      failed_df$replacement_lookup_status[i] <- "replacement_successful"
+      failed_df$lookup_status[i] <- "resolved_by_replacement"
+    } else {
+      failed_df$replacement_lookup_status[i] <- "replacement_failed"
+    }
+  }
+  
+  failed_replacements <- replacement_terms[
+    !replacement_terms %in% successful_taxonomy_terms
+  ]
+  
+  if (length(failed_replacements) > 0) {
+    message("Replacement terms that still failed taxonomy lookup:")
+    message("  - ", paste(failed_replacements, collapse = "\n  - "))
+    
+    failed_df <- .append_failed_terms(
+      failed_df,
+      terms = failed_replacements,
+      term_type = "replacement_lookup",
+      lookup_status = "failed"
+    )
+  }
+  
+  failed_df <- .add_failed_host_term_counts(failed_df, project_name, metadata_file)
+  
+  .write_failed_terms(failed_df, project_name, host_dir)
+  
+  merge_host_taxonomy_into_metadata(
+    project_name = project_name,
+    host_dir = host_dir,
+    metadata_file = metadata_file
+  )
+  
+  message("Refinement pass completed.")
+  
+  invisible(list(
+    taxonomy = .read_host_taxonomy(project_name, host_dir),
+    failed_table = failed_df,
+    lookup_result = lookup_result
+  ))
+}
+
+
+# -----------------------------
+# Summary wrapper
+# -----------------------------
+
+run_host_assessment_summary <- function(
+    project_name,
+    fungal_rank = "genus",
+    host_rank = "phylum",
+    keep_NAs = FALSE,
+    host_dir = "./host_assessment",
+    metadata_file = NULL
+) {
+  if (is.null(metadata_file)) {
+    metadata_file <- .host_metadata_path(project_name)
+  }
+  
+  host_col <- paste0("Host.", host_rank)
+  
+  meta <- read.csv(metadata_file, stringsAsFactors = FALSE)
+  
+  if (!host_col %in% names(meta)) {
+    message("Requested column ", host_col, " not found. Attempting to merge host taxonomy into metadata first.")
+    
+    merge_host_taxonomy_into_metadata(
+      project_name = project_name,
+      host_dir = host_dir,
+      metadata_file = metadata_file
+    )
+  }
+  
+  summarize_host_usage(
+    project_name = project_name,
+    fungal_rank = fungal_rank,
+    host_rank = host_rank,
+    keep_NAs = keep_NAs,
+    host_dir = host_dir,
+    metadata_file = metadata_file
+  )
+}
+
+
+
 
 # final data merge and summary creation
-run_host_assessment_summary <- function(project_name,
-                                        host_rank = "phylum",
-                                        keep_NAs = FALSE) {
-  message("Merging host taxonomy into curated metadata...")
-  merge_host_taxonomy_into_metadata(project_name)
-  
-  message(sprintf(
-    "Summarizing host usage at rank '%s' (keep_NAs = %s)...",
-    host_rank, keep_NAs
-  ))
-  summary_df <- summarize_host_usage(
+run_host_assessment_summary <- function(
     project_name,
+    fungal_rank = "genus",
+    host_rank   = "phylum",
+    keep_NAs    = FALSE,
+    host_dir    = "./host_assessment"
+) {
+  
+  summary <- summarize_host_usage(
+    project_name = project_name,
+    fungal_rank = fungal_rank,
     host_rank = host_rank,
-    keep_NAs  = keep_NAs
+    keep_NAs = keep_NAs,
+    host_dir = host_dir
+    # metadata_file intentionally NOT exposed
   )
   
-  message("Host assessment summary complete.")
-  invisible(summary_df)
+  invisible(summary)
 }
 
 
@@ -2290,6 +3439,35 @@ if (!exists("arborist_repo", envir = .GlobalEnv)) {
   arborist_repo <- normalizePath("~/github/aRborist")
 }
 
+start_project <- function(project_name,
+                          projects_dir = file.path(arborist_repo, "projects")) {
+  
+  if (!dir.exists(projects_dir)) {
+    dir.create(projects_dir, recursive = TRUE)
+    message("Created projects dir: ", projects_dir)
+  }
+  
+  base_dir <- file.path(projects_dir, project_name)
+  if (!dir.exists(base_dir)) {
+    dir.create(base_dir, recursive = TRUE)
+    message("Created project dir: ", base_dir)
+  }
+  
+  # make these visible to the rest of the pipeline
+  assign("project_name", project_name, envir = .GlobalEnv)
+  assign("base_dir", base_dir, envir = .GlobalEnv)
+  
+  # optional but useful: work inside the project
+  setwd(base_dir)
+  
+  # your existing function that makes metadata_files/, etc.
+  if (exists("setup_project_structure")) {
+    setup_project_structure(base_dir)
+  }
+  
+  invisible(normalizePath(base_dir))
+}
+
 concatenate_and_write_partitions <- function(project_name,
                                              regions_to_include) {
   if (!exists("base_dir", envir = .GlobalEnv)) {
@@ -2581,14 +3759,65 @@ ncbi_data_fetch <- function(taxa_list,
   invisible(accession_list)
 }
 
-# defunct, should prob revisit this
-data_curate <- function(project_name, taxa_of_interest = NULL, acc_to_exclude = NULL,
-                        min_region_requirement = length(regions_to_include)) {
-  merge_metadata_with_custom_file(project_name)
-  curate_metadata(project_name)
-  filter_metadata(project_name, taxa_of_interest, acc_to_exclude)
-  select_regions(project_name, min_region_requirement)
-  create_multifastas(project_name)
+
+data_curate <- function(project_name = get0("project_name", envir = .GlobalEnv, ifnotfound = NULL),
+                        taxa_of_interest = get0("taxa_of_interest", envir = .GlobalEnv, ifnotfound = NULL),
+                        my_lab_sequences = get0("my_lab_sequences", envir = .GlobalEnv, ifnotfound = ""),
+                        add_strain_taxonomy = TRUE,
+                        overwrite_strain_taxonomy = TRUE) {
+  
+  if (is.null(project_name) || !nzchar(project_name)) {
+    stop("project_name is not set. Run start_project(project_name) first, or pass project_name explicitly.")
+  }
+  
+  message("Starting metadata curation for project: ", project_name)
+  
+  # 1) Merge custom/lab-generated sequences and metadata before curation
+  message("\nStep 1: Checking for custom sequences/data...")
+  
+  merge_metadata_with_custom_file(
+    project_name = project_name,
+    my_lab_sequences = my_lab_sequences
+  )
+  
+  # 2) Basic metadata curation
+  # This creates:
+  #   strain.standard
+  #   strain.standard.type
+  #   org_name
+  #
+  # If add_strain_taxonomy = TRUE, curate_metadata_basic() also adds:
+  #   Strain.taxonomy
+  #   Strain.phylum
+  #   Strain.class
+  #   Strain.order
+  #   Strain.family
+  #   Strain.genus
+  #   Strain.species
+  message("\nStep 2: Running basic metadata curation...")
+  
+  curated_data <- curate_metadata_basic(
+    project_name = project_name,
+    taxa_of_interest = taxa_of_interest,
+    add_strain_taxonomy = add_strain_taxonomy,
+    overwrite_strain_taxonomy = overwrite_strain_taxonomy
+  )
+  
+  final_path <- file.path(
+    "./metadata_files",
+    paste0("all_accessions_pulled_metadata_", project_name, "_curated.csv")
+  )
+  
+  if (!file.exists(final_path)) {
+    warning("Expected final curated metadata file was not found: ", final_path)
+  } else {
+    message("\nFinal curated metadata written to: ", final_path)
+  }
+  
+  message("\nMetadata curation complete.")
+  message("Region curation remains separate. Run curate_metadata_regions(project_name) when needed.")
+  
+  invisible(curated_data)
 }
 
 

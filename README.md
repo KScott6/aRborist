@@ -160,11 +160,19 @@ save_project_config(
 
 ### 4) Collect metadata
 
-Another warning - if you set the options to collect a lot of accesssions, this step can take quite a while. 
+**Important:** This can be VERY time-intensive for large datasets.
 
-A note - when you search a term on NCBI, it will sometimes return accessions you are not interested in. For example, if you search "Pandora[organism]", NCBI will return all accessions explictedly labeled as "Pandora" in the "organism" field, as well as any accessions that have "Pandora" located anywhere in the metadata (such as in the "notes" or "Title" field). It will also include any accession that was historically named "Pandora" as well, I believe.  This is frustrating, as it will slow down your search by including accessions you don't care about. I haven't found a way around this yet. I've tried a few workarounds (e.g. "Pandora"[Organism:noexp]), but either they don't work or are too strict and result in too few hits. Later on in the curation steps, there is a step that automatically filtes out any accession whose organism name doesn't match to your list of target taxa. This means that you will probably have more accessions listed in your various intermediate files than you do in your final metadata file.
+(With my default parameters, I retrieved ~410,000 accessions and it took ~4 days to get all the metadata)
 
-If you've already set the values for "project_name", "max_acc_per_taxa", and "taxa_of_interest", you don't need to change the following command - just copy/paste/run as-is.
+**Tip:** For very large runs, consider testing your pipeline on a small subset first (e.g., max_acc_per_taxa = 50) to confirm that your search parameters behave as expected before scaling up.
+
+About NCBI search behavior: NCBI searches are not perfectly constrained to the "organism" field. For example, if you search "Pandora[organism]", NCBI will return all accessions explictedly labeled as "Pandora" in the "organism" field, as well as any accessions that have "Pandora" located anywhere in the metadata (such as in the "notes" or "Title" field). It will also include any accession that was historically named "Pandora" as well, I believe.  This is frustrating, as it will slow down your search by including accessions you don't care about. I haven't found a foolproof way around this yet. I've tried a few workarounds (e.g. "Pandora"[Organism:noexp]), but either they don't work or are too strict and result in too few hits. I've addressed this later on in the curation steps - there is a step that automatically filters out any accession whose organism name doesn't match to your list of target taxa. As a result, you will probably have more accessions listed in your various intermediate files than you do in your final metadata file; this is normal and not a cause for concern.
+
+Metadata retrieval is checkpointed by taxon (e.g., genus). Each taxon is written to its own file during the run (./metadata_files/metadata_checkpoints/metadata_<taxon>.csv). If the run is interrupted (e.g., laptop sleeps, internet drops, R crashes), progress is not lost! Re-running the same command with "resume = TRUE" will automatically skip metadata retreival for taxa that have already completed and will continue from where the run left off.
+
+<br>
+
+Running metadata retrieval:
 
 ```R
 ncbi_data_fetch(
@@ -177,6 +185,14 @@ ncbi_data_fetch(
 )
 ```
 
+Resuming metadata collection (in case of metadata retreival interruption):
+
+The ncbi_data_fetch() function runs both accession retrieval and metadata collection. If your metadata run is interrupted, you do not need to rerun everything. Instead, you can resume metadata collection directly:
+
+```R
+retrieve_ncbi_metadata(project_name, resume = TRUE)
+```
+
 <br>
 
 ### 5) Curation of metadata
@@ -187,39 +203,41 @@ NOTE:  Public metadata is highly inconsistent and often incomplete. Its quality 
 
 These are the curation steps that are peformed:
 
-1) Assign a universal strain name
+1) Integrate custom sequences (optional)
+   If you provided a file via my_lab_sequences, your custom sequences and metadata are merged into the NCBI metadata before any curation steps. This allows your data to be treated identically to public accessions throughout the pipeline.
+
+2) Assign a universal strain name
    Each accession receives a unified strain identifier (strain.standard) drawn from the following metadata fields, in order of priority:
-specimen_voucher → strain → isolate → Accession. If there is no voucher, strain, or isolate data recorded, the accession number itself is used.
+specimen_voucher → strain → isolate → Accession. If none of these fields are available, the accession number is used.
 
-2) Standardize strain names
-   All spaces and special characters are stripped. The standardized strain name is called "strain.standard".
-   Example:  Both "ARSEF 1234" and "ARSEF-1234" become "ARSEF1234". 
+1) Standardize strain names
+   All spaces and special characters are removed to ensure compatibility with downstream analyses and FASTA headers. The standardized strain name is called "strain.standard".
+   Example:  Both "ARSEF 1234" and "ARSEF-1234" become "ARSEF1234"
 
-3) Flag accessions from type material. 
-   If an accession’s metadata indicates type material (e.g., holotype, isotype, ex-type, etc.), "TYPE" is appended to the standardized strain name.
-   Example: "ARSEF1234.TYPE" in the column strain.standard.type.
+2) Flag accessions from type material. 
+   If an accession is associated with type material (e.g., holotype, isotype, ex-type, etc.), "TYPE" is appended to the standardized strain name. Stored in: "strain.standard.type".
+   Example: "ARSEF1234.TYPE"
 
-4) Optional taxon filtering. 
-   By default, any accession whose "organism" name does not match your specified taxa_of_interest is removed. You can disable this by passing taxa_of_interest = NULL.
+3) Optional taxon filtering. 
+   By default, any accession whose "organism" name does not match your specified taxa_of_interest is removed. You can disable this with taxa_of_interest = NULL.
+   
+4) Add strain/accession taxonomy
+   aRborist automatically extracts full fungal taxonomy for each accession from NCBI metadata category **GBSeq_taxonomy**. THe following columns are added: Strain.taxonomy, Strain.phylum, Strain.class, Strain.order, Strain.family, Strain.genus, Strain.species
 
+<br>
 
 Running the basic curation:
 
 Perform basic curation with taxon filtering (recommended):
 
 ```R
-curate_metadata_basic(project_name)
+data_curate(project_name)
 ```
 
-Perform basic curation without taxon filtering:
-
-```R
-curate_metadata_basic(project_name, taxa_of_interest = NULL)
-```
 
 After this step completes, a new file will be created in your project directory:
 
-./metadata_files/all_accessions_pulled_metadata_<project_name>_curated_basic.csv
+./metadata_files/all_accessions_pulled_metadata_<project_name>_curated.csv
 
 
 <br>
