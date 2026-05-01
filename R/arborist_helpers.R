@@ -199,6 +199,22 @@ load_project_config <- function(projects_dir, project_name) {
 # arborist main functions
 # ============================================================
 
+# cleaning taxon names, prevents weirdness from names with square brackets
+clean_taxon_name <- function(x) {
+  x <- as.character(x)
+  x <- trimws(x)
+  
+  # Remove square brackets around taxon names, e.g. [Neocosmospora] -> Neocosmospora
+  x <- gsub("^\\[(.*)\\]$", "\\1", x)
+  
+  # Clean extra whitespace again
+  x <- trimws(x)
+  
+  x[x == ""] <- NA_character_
+  
+  x
+}
+
 # Fetch accessions from NCBI - searching using entrez
 fetch_accessions_for_taxon <- function(taxon,
                                        max_acc        = max_acc_per_taxa,
@@ -767,6 +783,7 @@ add_strain_taxonomy_columns_to_df <- function(meta, overwrite = TRUE) {
   trim_ws <- function(x) {
     x <- as.character(x)
     x <- gsub("^\\s+|\\s+$", "", x)
+    x <- clean_taxon_name(x)
     x[x == ""] <- NA_character_
     x
   }
@@ -852,6 +869,23 @@ add_strain_taxonomy_columns_to_df <- function(meta, overwrite = TRUE) {
   })
   
   parsed_df <- do.call(rbind, parsed)
+  
+  strain_tax_cols <- c(
+    "Strain.taxonomy",
+    "Strain.phylum",
+    "Strain.class",
+    "Strain.order",
+    "Strain.family",
+    "Strain.genus",
+    "Strain.species"
+  )
+  
+  for (col in strain_tax_cols) {
+    if (col %in% names(parsed_df)) {
+      parsed_df[[col]] <- clean_taxon_name(parsed_df[[col]])
+    }
+  }
+  
   new_cols <- names(parsed_df)
   
   if (overwrite) {
