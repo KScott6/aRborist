@@ -223,86 +223,89 @@ fetch_accessions_for_taxon <- function(taxon,
                                        exclude_filters = NULL) {
   cat("Searching term:", taxon, "\n")
   
-  # Resolve defaults if not provided
-  if (is.null(organism_scope) && exists("organism_scope", .GlobalEnv))
-    organism_scope <- get("organism_scope", .GlobalEnv)
-  if (is.null(include_filters) && exists("search_include", .GlobalEnv))
-    include_filters <- get("search_include", .GlobalEnv)
-  if (is.null(exclude_filters) && exists("search_exclude", .GlobalEnv))
-    exclude_filters <- get("search_exclude", .GlobalEnv)
+  if (exists("raw_entrez_terms", envir = .GlobalEnv) &&
+      taxon %in% names(get("raw_entrez_terms", envir = .GlobalEnv))) {
+    
+    filters <- get("raw_entrez_terms", envir = .GlobalEnv)[[taxon]]
+    message("Using raw Entrez query for ", taxon, ": ", filters)
+    
+  } else {
+    
+    if (is.null(organism_scope) && exists("organism_scope", .GlobalEnv)) {
+      organism_scope <- get("organism_scope", .GlobalEnv)
+    }
+    if (is.null(include_filters) && exists("search_include", .GlobalEnv)) {
+      include_filters <- get("search_include", .GlobalEnv)
+    }
+    if (is.null(exclude_filters) && exists("search_exclude", .GlobalEnv)) {
+      exclude_filters <- get("search_exclude", .GlobalEnv)
+    }
+    
+    filters <- compose_entrez_term(
+      taxon            = taxon,
+      organism_scope   = organism_scope,
+      include_filters  = include_filters,
+      exclude_filters  = exclude_filters
+    )
+  }
   
-  # Build full query string
-  filters <- compose_entrez_term(
-    taxon            = taxon,
-    organism_scope   = organism_scope,
-    include_filters  = include_filters,
-    exclude_filters  = exclude_filters
+  search <- rentrez::entrez_search(
+    db = "nuccore",
+    term = filters,
+    use_history = TRUE,
+    retmax = 0
   )
   
-  search <- rentrez::entrez_search(db = "nucleotide", term = filters, retmax = 9999)
+  total_accession_count <- as.integer(search$count)
   
-  if (length(search$ids) == 0) {
+  if (is.na(total_accession_count) || total_accession_count == 0) {
     cat("No accessions found for:", taxon, "\n")
-    return(data.frame(Accession = character(0), genus = character(0), stringsAsFactors = FALSE))
+    return(data.frame(
+      Accession = character(0),
+      genus = character(0),
+      stringsAsFactors = FALSE
+    ))
   }
   
   max_n <- if (identical(max_acc, "max")) Inf else as.numeric(max_acc)
+  pull_n <- min(total_accession_count, max_n)
   
-  if (length(search$ids) == 9999) {
-    cat(taxon, "has ≥ 10,000 NCBI accessions. Using webhistory.\n")
-    large_search <- rentrez::entrez_search(db = "nucleotide", term = filters, use_history = TRUE)
-    total_accession_count <- as.integer(large_search[["count"]])
-    pull_n <- min(total_accession_count, max_n)
-    cat(total_accession_count, "accessions available for", taxon, "- pulling a maximum of", pull_n, "\n")
-    
-    tmp <- paste0("./intermediate_files/temp_file_accessions_from_", taxon, ".txt")
-    if (file.exists(tmp)) file.remove(tmp)
-    
-    for (seq_start in seq(0, pull_n - 1, by = 50)) {
-      recs <- rentrez::entrez_fetch(
-        db = "nuccore",
-        web_history = large_search$web_history,
-        rettype = "acc",
-        retmax = min(50, pull_n - seq_start),
-        retstart = seq_start
-      )
-      cat(recs, file = tmp, append = TRUE)
-      Sys.sleep(get_sleep_duration())
-    }
-    
-    df <- read.table(tmp, stringsAsFactors = FALSE)
-    colnames(df) <- "Accession"
-    df$genus <- taxon
-    file.remove(tmp)
-    cat("Accession retrieval for", taxon, "successful\n\n")
-    return(df)
-  }
+  cat(
+    total_accession_count, "accessions available for", taxon,
+    "- pulling a maximum of", pull_n, "\n"
+  )
   
-  ids <- search$ids
-  if (is.finite(max_n)) {
-    ids <- utils::head(ids, max_n)
-  }
+  acc_chunks <- list()
   
-  if (length(ids) <= 300) {
-    summary <- rentrez::entrez_summary(db = "nuccore", id = ids)
+  for (seq_start in seq(0, pull_n - 1, by = 50)) {
+    recs <- rentrez::entrez_fetch(
+      db = "nuccore",
+      web_history = search$web_history,
+      rettype = "acc",
+      retmax = min(50, pull_n - seq_start),
+      retstart = seq_start
+    )
+    
+    acc_chunks[[length(acc_chunks) + 1L]] <- unlist(strsplit(recs, "\\s+"))
     Sys.sleep(get_sleep_duration())
-  } else {
-    summary <- list()
-    idx <- split(seq_along(ids), ceiling(seq_along(ids) / 300))
-    for (p in idx) {
-      summary[p] <- rentrez::entrez_summary(db = "nuccore", id = ids[p])
-      Sys.sleep(get_sleep_duration())
-    }
-    class(summary) <- c("esummary_list", "list")
   }
   
-  tempdf <- data.frame(
-    Accession = unname(rentrez::extract_from_esummary(summary, "caption")),
+  acc_vec <- unique(unlist(acc_chunks))
+  acc_vec <- acc_vec[nzchar(acc_vec)]
+  
+  df <- data.frame(
+    Accession = acc_vec,
+    genus = taxon,
     stringsAsFactors = FALSE
   )
-  tempdf$genus <- taxon
-  cat("Search complete for", taxon, " (", nrow(tempdf), " accessions)\n", sep = "")
-  tempdf
+  
+  cat(
+    "Accession retrieval for ", taxon,
+    " successful: ", nrow(df), " accessions\n\n",
+    sep = ""
+  )
+  
+  return(df)
 }
 
 # pulling accessions using provided taxa names
