@@ -284,7 +284,12 @@ I create these pipelines primarily for myself, making them as needed for differe
 <br>
 <br>
 
-# aRborist Phylogenetic tree pipeline (includes fasta generation)
+---
+
+# aRborist Phylogenetic tree pipeline
+## includes fasta generation
+
+<br>
 
 ## Setup and software download
 
