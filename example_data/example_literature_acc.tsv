@@ -1,0 +1,436 @@
+paper_id	strain	organism	region	accession								
+Guan2020	IAFM Cy20-1	D. alcacerensis	ITS	JF735332								
+Guan2020	129087	D. alcacerensis	ITS	JF735333								
+Guan2020	CBS 564.95	D. anthruriicola	ITS	JF735302								
+Guan2020	Cy135 	D. estremocensis	ITS	AM419069								
+Guan2020	CBS 129085	D. estremocensis	ITS	JF735320								
+Guan2020	CBS 162.89	D. hordeicola	ITS	AM419060								
+Guan2020	3S07 	D. hordeicola	ITS	MF350482								
+Guan2020	CBS 112615	D. macrodidyma	ITS	AY677290								
+Guan2020	CBS 112601	D. macrodidyma	ITS	AY677284								
+Guan2020	CBS 112608	D. novozelandica	ITS	AY677288								
+Guan2020	CBS 113552	D. novozelandica	ITS	JF735334								
+Guan2020	CBS 159.34	D. pinicola	ITS	JF735318								
+Guan2020	CBS 173.37	D. pinicola	ITS	JF735319								
+Guan2020	Q18-22 	D. sp.	ITS	MT678572								
+Guan2020	Q18-23 	D. sp.	ITS	MT678573								
+Guan2020	CBS 129086	D. torresensis	ITS	JF735362								
+Guan2020	CBS 113555	D. torresensis	ITS	JF735350								
+Guan2020	DT2 	D. torresensis	ITS	MT678571								
+Guan2020	CBS 129082	D. vitis	ITS	JF735303								
+Guan2020	CGMCC 3.18789	I. changbaiensis	ITS	MF350464								
+Guan2020	72R2 	I. changbaiensis	ITS	MF350465								
+Guan2020	CB4-7 	I. changbaiensis	ITS	MT678567								
+Guan2020	Q24-5 	I. changbaiensis	ITS	MT678568								
+Guan2020	IAFM Cy20-1	D. alcacerensis	BTUB	AM419104								
+Guan2020	129087	D. alcacerensis	BTUB	AM419111								
+Guan2020	CBS 564.95	D. anthruriicola	BTUB	JF735430								
+Guan2020	Cy135 	D. estremocensis	BTUB	AM419105								
+Guan2020	CBS 129085	D. estremocensis	BTUB	JF735448								
+Guan2020	CBS 162.89	D. hordeicola	BTUB	AM419084								
+Guan2020	3S07 	D. hordeicola	BTUB	MF350428								
+Guan2020	CBS 112615	D. macrodidyma	BTUB	AY677233								
+Guan2020	CBS 112601	D. macrodidyma	BTUB	AY677229								
+Guan2020	CBS 112608	D. novozelandica	BTUB	AY677235								
+Guan2020	CBS 113552	D. novozelandica	BTUB	AY677237								
+Guan2020	CBS 159.34	D. pinicola	BTUB	JF735446								
+Guan2020	CBS 173.37	D. pinicola	BTUB	JF735447								
+Guan2020	Q18-22 	D. sp.	BTUB	MT810745								
+Guan2020	Q18-23 	D. sp.	BTUB	MT810746								
+Guan2020	CBS 129086	D. torresensis	BTUB	JF735492								
+Guan2020	CBS 113555	D. torresensis	BTUB	AY677234								
+Guan2020	DT2 	D. torresensis	BTUB	MT810744								
+Guan2020	CBS 129082	D. vitis	BTUB	JF735431								
+Guan2020	CGMCC 3.18789	I. changbaiensis	BTUB	MF350410								
+Guan2020	72R2 	I. changbaiensis	BTUB	MF350411								
+Guan2020	CB4-7 	I. changbaiensis	BTUB	MT810740								
+Guan2020	Q24-5 	I. changbaiensis	BTUB	MT810741								
+Guan2020	IAFM Cy20-1	D. alcacerensis	His3	JF735629								
+Guan2020	129087	D. alcacerensis	His3	JF735630								
+Guan2020	CBS 564.95	D. anthruriicola	His3	JF735579								
+Guan2020	Cy135 	D. estremocensis	His3	JF735615								
+Guan2020	CBS 129085	D. estremocensis	His3	JF735617								
+Guan2020	CBS 162.89	D. hordeicola	His3	JF735610								
+Guan2020	3S07 	D. hordeicola	His3	MF350455								
+Guan2020	CBS 112615	D. macrodidyma	His3	JF735647								
+Guan2020	CBS 112601	D. macrodidyma	His3	JF735644								
+Guan2020	CBS 112608	D. novozelandica	His3	JF735632								
+Guan2020	CBS 113552	D. novozelandica	His3	JF735633								
+Guan2020	CBS 159.34	D. pinicola	His3	JF735613								
+Guan2020	CBS 173.37	D. pinicola	His3	JF735614								
+Guan2020	Q18-22 	D. sp.	His3	MT800956								
+Guan2020	Q18-23 	D. sp.	His3	MT800957								
+Guan2020	CBS 129086	D. torresensis	His3	JF735681								
+Guan2020	CBS 113555	D. torresensis	His3	JF735661								
+Guan2020	DT2 	D. torresensis	His3	MT800955								
+Guan2020	CBS 129082	D. vitis	His3	JF735580								
+Guan2020	CGMCC 3.18789	I. changbaiensis	His3	MF350437								
+Guan2020	72R2 	I. changbaiensis	His3	MF350438								
+Guan2020	CB4-7 	I. changbaiensis	His3	MT800951								
+Guan2020	Q24-5 	I. changbaiensis	His3	MT800952								
+Guan2020	IAFM Cy20-1	D. alcacerensis	TEF	JF735818								
+Guan2020	129087	D. alcacerensis	TEF	JF735819								
+Guan2020	CBS 564.95	D. anthruriicola	TEF	JF735768								
+Guan2020	Cy135 	D. estremocensis	TEF	JF735804								
+Guan2020	CBS 129085	D. estremocensis	TEF	JF735806								
+Guan2020	CBS 162.89	D. hordeicola	TEF	JF735799								
+Guan2020	3S07 	D. hordeicola	TEF	MF350509								
+Guan2020	CBS 112615	D. macrodidyma	TEF	JF735836								
+Guan2020	CBS 112601	D. macrodidyma	TEF	JF735833								
+Guan2020	CBS 112608	D. novozelandica	TEF	JF735821								
+Guan2020	CBS 113552	D. novozelandica	TEF	JF735822								
+Guan2020	CBS 159.34	D. pinicola	TEF	JF735802								
+Guan2020	CBS 173.37	D. pinicola	TEF	JF735803								
+Guan2020	Q18-22 	D. sp.	TEF	MT800973								
+Guan2020	Q18-23 	D. sp.	TEF	MT800974								
+Guan2020	CBS 129086	D. torresensis	TEF	JF735870								
+Guan2020	CBS 113555	D. torresensis	TEF	JF735850								
+Guan2020	DT2 	D. torresensis	TEF	MT800972								
+Guan2020	CBS 129082	D. vitis	TEF	JF735769								
+Guan2020	CGMCC 3.18789	I. changbaiensis	TEF	MF350491								
+Guan2020	72R2 	I. changbaiensis	TEF	MF350492								
+Guan2020	CB4-7 	I. changbaiensis	TEF	MT800968								
+Guan2020	Q24-5 	I. changbaiensis	TEF	MT800969								
+Chen2021	CBS 129087ÊT; Cy159	Dactylonectria alcacerensis	ITS	JF735333								
+Chen2021	Cy134	Dactylonectria alcacerensis	ITS	JF735332								
+Chen2021	MUCL55430T	D. amazonica	ITS	MF683706								
+Chen2021	MUCL55433	D. amazonica	ITS	MF683707								
+Chen2021	CBS 564.95ÊT; PD95/1577	D. anthuriicola	ITS	JF735302								
+Chen2021	MUCL55424T	D. ecuadoriensis	ITS	MF683704								
+Chen2021	MUCL55205	D. ecuadoriensis	ITS	MF683700								
+Chen2021	CBS 129085ÊT; Cy145	D. estremocensis	ITS	JF735320								
+Chen2021	CPC 13539; CCFC226730	D. estremocensis	ITS	JF735330								
+Chen2021	CBS 162.89ÊT	D. hordeicola	ITS	AM419060								
+Chen2021	CBS 142827ÊT	D. hispanica	ITS	KY676882								
+Chen2021	Cy228	D. hispanica	ITS	JF735301								
+Chen2021	CBS 112601; CPC 3983	D. macrodidyma	ITS	AY677284								
+Chen2021	CBS 112615ÊT; CPC 3976	D. macrodidyma	ITS	AY677290								
+Chen2021	CBS 112608; CPC 3987	D. novozelandica	ITS	AY677288								
+Chen2021	CBS 113552ÊT; CPC 5713	D. novozelandica	ITS	JF735334								
+Chen2021	CGMCC3.19981	D. novozelandica	ITS	MN907546								
+Chen2021	CGMCC3.19984	D. novozelandica	ITS	MN907549								
+Chen2021	CGMCC3.19985	D. novozelandica	ITS	MN907550								
+Chen2021	Cy116	D. novozelandica	ITS	AJ875322								
+Chen2021	Cy230	D. novozelandica	ITS	JF735340								
+Chen2021	CBS 100819	D. pauciseptata	ITS	EF607090								
+Chen2021	CBS 120171ÊT	D. pauciseptata	ITS	EF607089								
+Chen2021	CGMCC3.19983	D. pauciseptata	ITS	MN907548								
+Chen2021	MUCL55426	D. pauciseptata	ITS	MF683708								
+Chen2021	CBS 159.34; IMI 113891; MUCL 4084; VKM F-2656	D. pinicola	ITS	JF735318								
+Chen2021	CBS 173.37ÊT; IMI 090176	D. pinicola	ITS	JF735319								
+Chen2021	MUCL55209T	D. polyphaga	ITS	MF683689								
+Chen2021	MUCL54802	D. polyphaga	ITS	MF683698								
+Chen2021	CBS 119.41	D. torresensis	ITS	JF735349								
+Chen2021	CBS 188.49	D. torresensis	ITS	AM419063								
+Chen2021	CBS 129086ÊT; Cy218	D. torresensis	ITS	JF735362								
+Chen2021	CGMCC3.19982	D. torresensis	ITS	MN907547								
+Chen2021	CBS 142826ÊT	D. valentina	ITS	KY676881								
+Chen2021	CBS 129082ÊT; Cy233	D. vitis	ITS	JF735303								
+Chen2021	CBS 129087ÊT; Cy159	Dactylonectria alcacerensis	BTUB	AM419111								
+Chen2021	Cy134	Dactylonectria alcacerensis	BTUB	AM419104								
+Chen2021	MUCL55430T	D. amazonica	BTUB	MF683643								
+Chen2021	MUCL55433	D. amazonica	BTUB	MF683644								
+Chen2021	CBS 564.95ÊT; PD95/1577	D. anthuriicola	BTUB	JF735430								
+Chen2021	MUCL55424T	D. ecuadoriensis	BTUB	MF683641								
+Chen2021	MUCL55205	D. ecuadoriensis	BTUB	MF683637								
+Chen2021	CBS 129085ÊT; Cy145	D. estremocensis	BTUB	JF735448								
+Chen2021	CPC 13539; CCFC226730	D. estremocensis	BTUB	JF735458								
+Chen2021	CBS 162.89ÊT	D. hordeicola	BTUB	AM419084								
+Chen2021	CBS 142827ÊT	D. hispanica	BTUB	KY676876								
+Chen2021	Cy228	D. hispanica	BTUB	JF735429								
+Chen2021	CBS 112601; CPC 3983	D. macrodidyma	BTUB	AY677229								
+Chen2021	CBS 112615ÊT; CPC 3976	D. macrodidyma	BTUB	AY677233								
+Chen2021	CBS 112608; CPC 3987	D. novozelandica	BTUB	AY677235								
+Chen2021	CBS 113552ÊT; CPC 5713	D. novozelandica	BTUB	AY677237								
+Chen2021	CGMCC3.19981	D. novozelandica	BTUB	MN918696								
+Chen2021	CGMCC3.19984	D. novozelandica	BTUB	MN918699								
+Chen2021	CGMCC3.19985	D. novozelandica	BTUB	MN918700								
+Chen2021	Cy116	D. novozelandica	BTUB	JF735461								
+Chen2021	Cy230	D. novozelandica	BTUB	JF735468								
+Chen2021	CBS 100819	D. pauciseptata	BTUB	EF607067								
+Chen2021	CBS 120171ÊT	D. pauciseptata	BTUB	EF607066								
+Chen2021	CGMCC3.19983	D. pauciseptata	BTUB	MN918698								
+Chen2021	MUCL55426	D. pauciseptata	BTUB	MF683645								
+Chen2021	CBS 159.34; IMI 113891; MUCL 4084; VKM F-2656	D. pinicola	BTUB	JF735446								
+Chen2021	CBS 173.37ÊT; IMI 090176	D. pinicola	BTUB	JF735447								
+Chen2021	MUCL55209T	D. polyphaga	BTUB	MF683626								
+Chen2021	MUCL54802	D. polyphaga	BTUB	MF683635								
+Chen2021	CBS 119.41	D. torresensis	BTUB	JF735478								
+Chen2021	CBS 188.49	D. torresensis	BTUB	AM419087								
+Chen2021	CBS 129086ÊT; Cy218	D. torresensis	BTUB	JF735492								
+Chen2021	CGMCC3.19982	D. torresensis	BTUB	MN918697								
+Chen2021	CBS 142826ÊT	D. valentina	BTUB	KY676875								
+Chen2021	CBS 129082ÊT; Cy233	D. vitis	BTUB	JF735431								
+Chen2021	CBS 129087ÊT; Cy159	Dactylonectria alcacerensis	His3	JF735630								
+Chen2021	Cy134	Dactylonectria alcacerensis	His3	JF735629								
+Chen2021	MUCL55430T	D. amazonica	His3	MF683685								
+Chen2021	MUCL55433	D. amazonica	His3	MF683686								
+Chen2021	CBS 564.95ÊT; PD95/1577	D. anthuriicola	His3	JF735579								
+Chen2021	MUCL55424T	D. ecuadoriensis	His3	MF683683								
+Chen2021	MUCL55205	D. ecuadoriensis	His3	MF683679								
+Chen2021	CBS 129085ÊT; Cy145	D. estremocensis	His3	JF735617								
+Chen2021	CPC 13539; CCFC226730	D. estremocensis	His3	JF735627								
+Chen2021	CBS 162.89ÊT	D. hordeicola	His3	JF735610								
+Chen2021	CBS 142827ÊT	D. hispanica	His3	KY676864								
+Chen2021	Cy228	D. hispanica	His3	JF735578								
+Chen2021	CBS 112601; CPC 3983	D. macrodidyma	His3	JF735644								
+Chen2021	CBS 112615ÊT; CPC 3976	D. macrodidyma	His3	JF735647								
+Chen2021	CBS 112608; CPC 3987	D. novozelandica	His3	JF735632								
+Chen2021	CBS 113552ÊT; CPC 5713	D. novozelandica	His3	JF735633								
+Chen2021	CGMCC3.19981	D. novozelandica	His3	MN918691								
+Chen2021	CGMCC3.19984	D. novozelandica	His3	MN918694								
+Chen2021	CGMCC3.19985	D. novozelandica	His3	MN918695								
+Chen2021	Cy116	D. novozelandica	His3	JF735635								
+Chen2021	Cy230	D. novozelandica	His3	JF735642								
+Chen2021	CBS 100819	D. pauciseptata	His3	JF735582								
+Chen2021	CBS 120171ÊT	D. pauciseptata	His3	JF735587								
+Chen2021	CGMCC3.19983	D. pauciseptata	His3	MN918693								
+Chen2021	MUCL55426	D. pauciseptata	His3	MF683687								
+Chen2021	CBS 159.34; IMI 113891; MUCL 4084; VKM F-2656	D. pinicola	His3	JF735613								
+Chen2021	CBS 173.37ÊT; IMI 090176	D. pinicola	His3	JF735614								
+Chen2021	MUCL55209T	D. polyphaga	His3	MF683668								
+Chen2021	MUCL54802	D. polyphaga	His3	MF683677								
+Chen2021	CBS 119.41	D. torresensis	His3	JF735657								
+Chen2021	CBS 188.49	D. torresensis	His3	JF735658								
+Chen2021	CBS 129086ÊT; Cy218	D. torresensis	His3	JF735681								
+Chen2021	CGMCC3.19982	D. torresensis	His3	MN918692								
+Chen2021	CBS 142826ÊT	D. valentina	His3	KY676863								
+Chen2021	CBS 129082ÊT; Cy233	D. vitis	His3	JF735580								
+Chen2021	CBS 129087ÊT; Cy159	Dactylonectria alcacerensis	TEF	JF735819								
+Chen2021	Cy134	Dactylonectria alcacerensis	TEF	JF735818								
+Chen2021	MUCL55430T	D. amazonica	TEF	MF683664								
+Chen2021	MUCL55433	D. amazonica	TEF	MF683665								
+Chen2021	CBS 564.95ÊT; PD95/1577	D. anthuriicola	TEF	JF735768								
+Chen2021	MUCL55424T	D. ecuadoriensis	TEF	MF683662								
+Chen2021	MUCL55205	D. ecuadoriensis	TEF	MF683658								
+Chen2021	CBS 129085ÊT; Cy145	D. estremocensis	TEF	JF735806								
+Chen2021	CPC 13539; CCFC226730	D. estremocensis	TEF	JF735816								
+Chen2021	CBS 162.89ÊT	D. hordeicola	TEF	JF735799								
+Chen2021	CBS 142827ÊT	D. hispanica	TEF	KY676870								
+Chen2021	Cy228	D. hispanica	TEF	JF735767								
+Chen2021	CBS 112601; CPC 3983	D. macrodidyma	TEF	JF735833								
+Chen2021	CBS 112615ÊT; CPC 3976	D. macrodidyma	TEF	JF735836								
+Chen2021	CBS 112608; CPC 3987	D. novozelandica	TEF	JF735821								
+Chen2021	CBS 113552ÊT; CPC 5713	D. novozelandica	TEF	JF735822								
+Chen2021	CGMCC3.19981	D. novozelandica	TEF	MN918701								
+Chen2021	CGMCC3.19984	D. novozelandica	TEF	MN918704								
+Chen2021	CGMCC3.19985	D. novozelandica	TEF	MN918705								
+Chen2021	Cy116	D. novozelandica	TEF	JF735824								
+Chen2021	Cy230	D. novozelandica	TEF	JF735831								
+Chen2021	CBS 100819	D. pauciseptata	TEF	JF735771								
+Chen2021	CBS 120171ÊT	D. pauciseptata	TEF	JF735776								
+Chen2021	CGMCC3.19983	D. pauciseptata	TEF	MN918703								
+Chen2021	MUCL55426	D. pauciseptata	TEF	MF683666								
+Chen2021	CBS 159.34; IMI 113891; MUCL 4084; VKM F-2656	D. pinicola	TEF	JF735802								
+Chen2021	CBS 173.37ÊT; IMI 090176	D. pinicola	TEF	JF735803								
+Chen2021	MUCL55209T	D. polyphaga	TEF	MF683647								
+Chen2021	MUCL54802	D. polyphaga	TEF	MF683656								
+Chen2021	CBS 119.41	D. torresensis	TEF	JF735846								
+Chen2021	CBS 188.49	D. torresensis	TEF	JF735847								
+Chen2021	CBS 129086ÊT; Cy218	D. torresensis	TEF	JF735870								
+Chen2021	CGMCC3.19982	D. torresensis	TEF	MN918702								
+Chen2021	CBS 142826ÊT	D. valentina	TEF	KY676869								
+Chen2021	CBS 129082ÊT; Cy233	D. vitis	TEF	JF735769								
+Lawrence2019	CBS129087	Dactylonectria alcacerensis	ITS	JF735333								
+Lawrence2019	Cy133	Dactylonectria alcacerensis	ITS	JF735331								
+Lawrence2019	Cy134	Dactylonectria alcacerensis	ITS	JF735332								
+Lawrence2019	KARE413	Dactylonectria alcacerensis	ITS	MK400304								
+Lawrence2019	KARE417	Dactylonectria alcacerensis	ITS	MK400305								
+Lawrence2019	KARE418	Dactylonectria alcacerensis	ITS	MK400306								
+Lawrence2019	MUCL55430	Dactylonectria amazonica	ITS	MF683706								
+Lawrence2019	MUCL55433	Dactylonectria amazonica	ITS	MF683707								
+Lawrence2019	CBS129085	Dactylonectria anthuriicola	ITS	JF735302								
+Lawrence2019	MUCL55424	Dactylonectria ecuadoriensis	ITS	MF683704								
+Lawrence2019	MUCL55205	Dactylonectria ecuadoriensis	ITS	MF683700								
+Lawrence2019	MUCL55226	Dactylonectria ecuadoriensis	ITS	MF683703								
+Lawrence2019	MUCL55432	Dactylonectria ecuadoriensis	ITS	MF683702								
+Lawrence2019	MUCL55431	Dactylonectria ecuadoriensis	ITS	MF683701								
+Lawrence2019	MUCL55425	Dactylonectria ecuadoriensis	ITS	MF683705								
+Lawrence2019	KARE2108	Dactylonectria ecuadoriensis	ITS	MK400316								
+Lawrence2019	KARE2110	Dactylonectria ecuadoriensis	ITS	MK400317								
+Lawrence2019	KARE2113	Dactylonectria ecuadoriensis	ITS	MK400318								
+Lawrence2019	KARE2114	Dactylonectria ecuadoriensis	ITS	MK400319								
+Lawrence2019	CBS129085	Dactylonectria estremocencis	ITS	JF735320								
+Lawrence2019	CPC13539	Dactylonectria estremocencis	ITS	JF735330								
+Lawrence2019	CBS142827	Dactylonectria hispanica	ITS	KY676882								
+Lawrence2019	Cy228	Dactylonectria hispanica	ITS	JF735301								
+Lawrence2019	CBS112615	Dactylonectria macrodidyma	ITS	AY677284								
+Lawrence2019	Cy123	Dactylonectria macrodidyma	ITS	JF735341								
+Lawrence2019	Cy139	Dactylonectria macrodidyma	ITS	AM419071								
+Lawrence2019	KARE423	Dactylonectria macrodidyma	ITS	MK400300								
+Lawrence2019	KARE2109	Dactylonectria macrodidyma	ITS	MK400301								
+Lawrence2019	KARE2039	Dactylonectria macrodidyma	ITS	MK400302								
+Lawrence2019	KARE2127	Dactylonectria macrodidyma	ITS	MK400303								
+Lawrence2019	CBS113552	Dactylonectria novozelandica	ITS	JF735334								
+Lawrence2019	Cy115	Dactylonectria novozelandica	ITS	JF735335								
+Lawrence2019	Cy116	Dactylonectria novozelandica	ITS	AJ875322								
+Lawrence2019	KARE192	Dactylonectria novozelandica	ITS	MK400307								
+Lawrence2019	KARE474	Dactylonectria novozelandica	ITS	MK400308								
+Lawrence2019	KARE2036	Dactylonectria novozelandica	ITS	MK400309								
+Lawrence2019	KARE2037	Dactylonectria novozelandica	ITS	MK400310								
+Lawrence2019	KARE2038	Dactylonectria novozelandica	ITS	MK400311								
+Lawrence2019	KARE2125	Dactylonectria novozelandica	ITS	MK400312								
+Lawrence2019	KARE2126	Dactylonectria novozelandica	ITS	MK400313								
+Lawrence2019	MUCL55209	Dactylonectria polyphaga	ITS	MF683689								
+Lawrence2019	MUCL54802	Dactylonectria polyphaga	ITS	MF683698								
+Lawrence2019	CBS129086	Dactylonectria torresensis	ITS	JF735362								
+Lawrence2019	Cy118	Dactylonectria torresensis	ITS	JF735354								
+Lawrence2019	Cy120	Dactylonectria torresensis	ITS	AJ875320								
+Lawrence2019	KARE1173	Dactylonectria torresensis	ITS	MK400298								
+Lawrence2019	KARE1174	Dactylonectria torresensis	ITS	MK400299								
+Lawrence2019	CBS142826	Dactylonectria valentina	ITS	KY676881								
+Lawrence2019	KARE2111	Dactylonectria valentina	ITS	MK400314								
+Lawrence2019	KARE2112	Dactylonectria valentina	ITS	MK400315								
+Lawrence2019	CBS129082	Dactylonectria vitis	ITS	JF735303								
+Lawrence2019	CBS129087	Dactylonectria alcacerensis	TEF	JF735819								
+Lawrence2019	Cy133	Dactylonectria alcacerensis	TEF	JF735817								
+Lawrence2019	Cy134	Dactylonectria alcacerensis	TEF	JF735818								
+Lawrence2019	KARE413	Dactylonectria alcacerensis	TEF	MK409948								
+Lawrence2019	KARE417	Dactylonectria alcacerensis	TEF	MK409949								
+Lawrence2019	KARE418	Dactylonectria alcacerensis	TEF	MK409950								
+Lawrence2019	MUCL55430	Dactylonectria amazonica	TEF	MF683664								
+Lawrence2019	MUCL55433	Dactylonectria amazonica	TEF	MF683665								
+Lawrence2019	CBS129085	Dactylonectria anthuriicola	TEF	JF735768								
+Lawrence2019	MUCL55424	Dactylonectria ecuadoriensis	TEF	MF683662								
+Lawrence2019	MUCL55205	Dactylonectria ecuadoriensis	TEF	MF683658								
+Lawrence2019	MUCL55226	Dactylonectria ecuadoriensis	TEF	MF683661								
+Lawrence2019	MUCL55432	Dactylonectria ecuadoriensis	TEF	MF683660								
+Lawrence2019	MUCL55431	Dactylonectria ecuadoriensis	TEF	MF683659								
+Lawrence2019	MUCL55425	Dactylonectria ecuadoriensis	TEF	MF683663								
+Lawrence2019	KARE2108	Dactylonectria ecuadoriensis	TEF	MK409960								
+Lawrence2019	KARE2110	Dactylonectria ecuadoriensis	TEF	MK409961								
+Lawrence2019	KARE2113	Dactylonectria ecuadoriensis	TEF	MK409962								
+Lawrence2019	KARE2114	Dactylonectria ecuadoriensis	TEF	MK409963								
+Lawrence2019	CBS129085	Dactylonectria estremocencis	TEF	JF735806								
+Lawrence2019	CPC13539	Dactylonectria estremocencis	TEF	JF735816								
+Lawrence2019	CBS142827	Dactylonectria hispanica	TEF	KY676870								
+Lawrence2019	Cy228	Dactylonectria hispanica	TEF	JF735767								
+Lawrence2019	CBS112615	Dactylonectria macrodidyma	TEF	JF735833								
+Lawrence2019	Cy123	Dactylonectria macrodidyma	TEF	JF735837								
+Lawrence2019	Cy139	Dactylonectria macrodidyma	TEF	JF735839								
+Lawrence2019	KARE423	Dactylonectria macrodidyma	TEF	MK409944								
+Lawrence2019	KARE2109	Dactylonectria macrodidyma	TEF	MK409945								
+Lawrence2019	KARE2039	Dactylonectria macrodidyma	TEF	MK409946								
+Lawrence2019	KARE2127	Dactylonectria macrodidyma	TEF	MK409947								
+Lawrence2019	CBS113552	Dactylonectria novozelandica	TEF	JF735822								
+Lawrence2019	Cy115	Dactylonectria novozelandica	TEF	JF735823								
+Lawrence2019	Cy116	Dactylonectria novozelandica	TEF	JF735824								
+Lawrence2019	KARE192	Dactylonectria novozelandica	TEF	MK409951								
+Lawrence2019	KARE474	Dactylonectria novozelandica	TEF	MK409952								
+Lawrence2019	KARE2036	Dactylonectria novozelandica	TEF	MK409953								
+Lawrence2019	KARE2037	Dactylonectria novozelandica	TEF	MK409954								
+Lawrence2019	KARE2038	Dactylonectria novozelandica	TEF	MK409955								
+Lawrence2019	KARE2125	Dactylonectria novozelandica	TEF	MK409956								
+Lawrence2019	KARE2126	Dactylonectria novozelandica	TEF	MK409957								
+Lawrence2019	MUCL55209	Dactylonectria polyphaga	TEF	MF683647								
+Lawrence2019	MUCL54802	Dactylonectria polyphaga	TEF	MF683656								
+Lawrence2019	CBS129086	Dactylonectria torresensis	TEF	JF735870								
+Lawrence2019	Cy118	Dactylonectria torresensis	TEF	JF735859								
+Lawrence2019	Cy120	Dactylonectria torresensis	TEF	JF735860								
+Lawrence2019	KARE1173	Dactylonectria torresensis	TEF	MK409942								
+Lawrence2019	KARE1174	Dactylonectria torresensis	TEF	MK409943								
+Lawrence2019	CBS142826	Dactylonectria valentina	TEF	KY676869								
+Lawrence2019	KARE2111	Dactylonectria valentina	TEF	MK409958								
+Lawrence2019	KARE2112	Dactylonectria valentina	TEF	MK409959								
+Lawrence2019	CBS129082	Dactylonectria vitis	TEF	JF735769								
+Lawrence2019	CBS129087	Dactylonectria alcacerensis	BTUB	AM419111								
+Lawrence2019	Cy133	Dactylonectria alcacerensis	BTUB	JF735459								
+Lawrence2019	Cy134	Dactylonectria alcacerensis	BTUB	JF735629								
+Lawrence2019	KARE413	Dactylonectria alcacerensis	BTUB	MK409871								
+Lawrence2019	KARE417	Dactylonectria alcacerensis	BTUB	MK409872								
+Lawrence2019	KARE418	Dactylonectria alcacerensis	BTUB	MK409873								
+Lawrence2019	MUCL55430	Dactylonectria amazonica	BTUB	MF683643								
+Lawrence2019	MUCL55433	Dactylonectria amazonica	BTUB	MF683644								
+Lawrence2019	CBS129085	Dactylonectria anthuriicola	BTUB	JF735430								
+Lawrence2019	MUCL55424	Dactylonectria ecuadoriensis	BTUB	MF683641								
+Lawrence2019	MUCL55205	Dactylonectria ecuadoriensis	BTUB	MF683637								
+Lawrence2019	MUCL55226	Dactylonectria ecuadoriensis	BTUB	MF683640								
+Lawrence2019	MUCL55432	Dactylonectria ecuadoriensis	BTUB	MF683639								
+Lawrence2019	MUCL55431	Dactylonectria ecuadoriensis	BTUB	MF683638								
+Lawrence2019	MUCL55425	Dactylonectria ecuadoriensis	BTUB	MF683642								
+Lawrence2019	KARE2108	Dactylonectria ecuadoriensis	BTUB	MK409883								
+Lawrence2019	KARE2110	Dactylonectria ecuadoriensis	BTUB	MK409884								
+Lawrence2019	KARE2113	Dactylonectria ecuadoriensis	BTUB	MK409885								
+Lawrence2019	KARE2114	Dactylonectria ecuadoriensis	BTUB	MK409886								
+Lawrence2019	CBS129085	Dactylonectria estremocencis	BTUB	JF735448								
+Lawrence2019	CPC13539	Dactylonectria estremocencis	BTUB	JF735458								
+Lawrence2019	CBS142827	Dactylonectria hispanica	BTUB	KY676876								
+Lawrence2019	Cy228	Dactylonectria hispanica	BTUB	JF735429								
+Lawrence2019	CBS112615	Dactylonectria macrodidyma	BTUB	AY677229								
+Lawrence2019	Cy123	Dactylonectria macrodidyma	BTUB	JF735470								
+Lawrence2019	Cy139	Dactylonectria macrodidyma	BTUB	AM419106								
+Lawrence2019	KARE423	Dactylonectria macrodidyma	BTUB	MK409867								
+Lawrence2019	KARE2109	Dactylonectria macrodidyma	BTUB	MK409868								
+Lawrence2019	KARE2039	Dactylonectria macrodidyma	BTUB	MK409869								
+Lawrence2019	KARE2127	Dactylonectria macrodidyma	BTUB	MK409870								
+Lawrence2019	CBS113552	Dactylonectria novozelandica	BTUB	AY677237								
+Lawrence2019	Cy115	Dactylonectria novozelandica	BTUB	JF735460								
+Lawrence2019	Cy116	Dactylonectria novozelandica	BTUB	JF735461								
+Lawrence2019	KARE192	Dactylonectria novozelandica	BTUB	MK409874								
+Lawrence2019	KARE474	Dactylonectria novozelandica	BTUB	MK409875								
+Lawrence2019	KARE2036	Dactylonectria novozelandica	BTUB	MK409876								
+Lawrence2019	KARE2037	Dactylonectria novozelandica	BTUB	MK409877								
+Lawrence2019	KARE2038	Dactylonectria novozelandica	BTUB	MK409878								
+Lawrence2019	KARE2125	Dactylonectria novozelandica	BTUB	MK409879								
+Lawrence2019	KARE2126	Dactylonectria novozelandica	BTUB	MK409880								
+Lawrence2019	MUCL55209	Dactylonectria polyphaga	BTUB	MF683626								
+Lawrence2019	MUCL54802	Dactylonectria polyphaga	BTUB	MF683635								
+Lawrence2019	CBS129086	Dactylonectria torresensis	BTUB	JF735492								
+Lawrence2019	Cy118	Dactylonectria torresensis	BTUB	JF735483								
+Lawrence2019	Cy120	Dactylonectria torresensis	BTUB	AJ875320								
+Lawrence2019	KARE1173	Dactylonectria torresensis	BTUB	MK409865								
+Lawrence2019	KARE1174	Dactylonectria torresensis	BTUB	MK409866								
+Lawrence2019	CBS142826	Dactylonectria valentina	BTUB	KY676875								
+Lawrence2019	KARE2111	Dactylonectria valentina	BTUB	MK409881								
+Lawrence2019	KARE2112	Dactylonectria valentina	BTUB	MK409882								
+Lawrence2019	CBS129082	Dactylonectria vitis	BTUB	JF735431								
+Lawrence2019	CBS129087	Dactylonectria alcacerensis	His3	JF735630								
+Lawrence2019	Cy133	Dactylonectria alcacerensis	His3	JF735628								
+Lawrence2019	Cy134	Dactylonectria alcacerensis	His3	JF735629								
+Lawrence2019	KARE413	Dactylonectria alcacerensis	His3	MK409906								
+Lawrence2019	KARE417	Dactylonectria alcacerensis	His3	MK409907								
+Lawrence2019	KARE418	Dactylonectria alcacerensis	His3	MK409908								
+Lawrence2019	MUCL55430	Dactylonectria amazonica	His3	MF683685								
+Lawrence2019	MUCL55433	Dactylonectria amazonica	His3	MF683686								
+Lawrence2019	MUCL55424	Dactylonectria ecuadoriensis	His3	MF683683								
+Lawrence2019	MUCL55205	Dactylonectria ecuadoriensis	His3	MF683679								
+Lawrence2019	MUCL55226	Dactylonectria ecuadoriensis	His3	MF683682								
+Lawrence2019	MUCL55432	Dactylonectria ecuadoriensis	His3	MF683681								
+Lawrence2019	MUCL55431	Dactylonectria ecuadoriensis	His3	MF683680								
+Lawrence2019	MUCL55425	Dactylonectria ecuadoriensis	His3	MF683684								
+Lawrence2019	KARE2108	Dactylonectria ecuadoriensis	His3	MK409918								
+Lawrence2019	KARE2110	Dactylonectria ecuadoriensis	His3	MK409919								
+Lawrence2019	KARE2113	Dactylonectria ecuadoriensis	His3	MK409920								
+Lawrence2019	KARE2114	Dactylonectria ecuadoriensis	His3	MK409921								
+Lawrence2019	CBS129085	Dactylonectria estremocencis	His3	JF735617								
+Lawrence2019	CPC13539	Dactylonectria estremocencis	His3	JF735627								
+Lawrence2019	CBS142827	Dactylonectria hispanica	His3	KY676864								
+Lawrence2019	Cy228	Dactylonectria hispanica	His3	JF735578								
+Lawrence2019	CBS112615	Dactylonectria macrodidyma	His3	JF735647								
+Lawrence2019	Cy123	Dactylonectria macrodidyma	His3	JF735648								
+Lawrence2019	Cy139	Dactylonectria macrodidyma	His3	JF735650								
+Lawrence2019	KARE423	Dactylonectria macrodidyma	His3	MK409902								
+Lawrence2019	KARE2109	Dactylonectria macrodidyma	His3	MK409903								
+Lawrence2019	KARE2039	Dactylonectria macrodidyma	His3	MK409904								
+Lawrence2019	KARE2127	Dactylonectria macrodidyma	His3	MK409905								
+Lawrence2019	CBS113552	Dactylonectria novozelandica	His3	JF735633								
+Lawrence2019	Cy115	Dactylonectria novozelandica	His3	JF735634								
+Lawrence2019	Cy116	Dactylonectria novozelandica	His3	JF735635								
+Lawrence2019	KARE192	Dactylonectria novozelandica	His3	MK409909								
+Lawrence2019	KARE474	Dactylonectria novozelandica	His3	MK409910								
+Lawrence2019	KARE2036	Dactylonectria novozelandica	His3	MK409911								
+Lawrence2019	KARE2037	Dactylonectria novozelandica	His3	MK409912								
+Lawrence2019	KARE2038	Dactylonectria novozelandica	His3	MK409913								
+Lawrence2019	KARE2125	Dactylonectria novozelandica	His3	MK409914								
+Lawrence2019	KARE2126	Dactylonectria novozelandica	His3	MK409915								
+Lawrence2019	MUCL55209	Dactylonectria polyphaga	His3	MF683668								
+Lawrence2019	MUCL54802	Dactylonectria polyphaga	His3	MF683677								
+Lawrence2019	CBS129086	Dactylonectria torresensis	His3	JF735681								
+Lawrence2019	Cy118	Dactylonectria torresensis	His3	JF735670								
+Lawrence2019	Cy120	Dactylonectria torresensis	His3	JF735671								
+Lawrence2019	KARE1173	Dactylonectria torresensis	His3	MK409900								
+Lawrence2019	KARE1174	Dactylonectria torresensis	His3	MK409901								
+Lawrence2019	CBS142826	Dactylonectria valentina	His3	KY676863								
+Lawrence2019	KARE2111	Dactylonectria valentina	His3	MK409916								
+Lawrence2019	KARE2112	Dactylonectria valentina	His3	MK409917								
+Lawrence2019	CBS129082	Dactylonectria vitis	His3	JF735580								

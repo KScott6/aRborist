@@ -1,21 +1,89 @@
 ﻿pattern,standard
-tef-*\\d*,TEF
+\bTEF\b,TEF
+\bTEF1\b,TEF
+\bTEF1[-_ ]?a\b,TEF
+\bTEF1[-_ ]?alpha\b,TEF
+\bEF[-_ ]?1[-_ ]?alpha\b,TEF
+\bEF1[-_ ]?alpha\b,TEF
+translation elongation factor 1[-_ ]?alpha,TEF
+elongation factor 1[-_ ]?alpha,TEF
+tef1,TEF
+tef-?1,TEF
+tef-?1-?alpha,TEF
+translation elongation factor 1-alpha,TEF
+translation elongation factor 1 alpha,TEF
+elongation factor 1,TEF
 EF1-alpha,TEF
 ef1a,TEF
+\\bTEF\\b,TEF
+\\bBTUB\\b,BTUB
 b-tub,BTUB
-TUB2,BTUB
-RBP2,RPB2
-RPB2,RPB2
-RBP1,RPB1
-RPB1,RPB1
-elongation factor 1,TEF
-internal transcribed,ITS
-26S,LSU
-28S,LSU
-small subunit ribosomal,SSU
-^large[st]* subunit ribosomal,LSU
 beta-tubulin,BTUB
-actin beta,actin
-licensing\\D*7\\D*,MCM7
-polymerase II larg[est]*,RPB1
+beta tubulin,BTUB
+tubulin beta chain,BTUB
+\\bTUB2\\b,BTUB
+\\btubb\\b,BTUB
+\\bRPB2\\b,RPB2
+\\bRBP2\\b,RPB2
+RNA polymerase II second largest,RPB2
 polymerase II second largest,RPB2
+\\bRPB1\\b,RPB1
+\\bRBP1\\b,RPB1
+RNA polymerase II largest,RPB1
+polymerase II largest,RPB1
+polymerase II largest subunit,RPB1
+internal transcribed,ITS
+\\bITS\\b,ITS
+\\bITS1\\b,ITS
+\\bITS2\\b,ITS
+\\b5\\.8S\\b,ITS
+\\bLSU\\b,LSU
+\\bnrLSU\\b,LSU
+\\b28S\\b,LSU
+\\b26S\\b,LSU
+\\b25S\\b,LSU
+large subunit ribosomal,LSU
+large subunit rRNA,LSU
+D1[-/]D2,LSU
+\\bSSU\\b,SSU
+\\bnrSSU\\b,SSU
+\\b18S\\b,SSU
+small subunit ribosomal,SSU
+small subunit rRNA,SSU
+\\bACT\\b,ACT
+\\bACT1\\b,ACT
+\\bact1\\b,ACT
+alpha-actin,ACT
+alpha actin,ACT
+\\bactin\\b,ACT
+histone H3,His3
+histone 3,His3
+\\bH3\\b,His3
+\\bhis3\\b,His3
+\\bhis4\\b,His4
+licensing\\D*7\\D*,MCM7
+\\bMCM7\\b,MCM7
+calmodulin,cmdA
+\\bcmdA\\b,cmdA
+\\bacl1\\b,acl1
+ATP citrate lyase,acl1
+His3,His3
+histone H3,His3
+rpb1,RPB1
+rpb2,RPB2
+ef-1alpha,TEF
+ef1-alpha,TEF
+tef1,TEF
+tef1-alpha,TEF
+translation elongation factor 1-alpha,TEF
+tubb,BTUB
+tub2,BTUB
+beta-tubulin,BTUB
+ef[-_ ]?1[-_ ]?alpha,TEF
+\bhis\b,His3
+\btub\b,BTUB
+H3,His3
+\bLSU\b,LSU
+\bTUB\b,BTUB
+\bITS1\b,ITS
+\bITS2\b,ITS

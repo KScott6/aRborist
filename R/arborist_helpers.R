@@ -728,7 +728,20 @@ merge_metadata_with_custom_file <- function(project_name,
     stop("Metadata file not found: ", metadata_file_path)
   }
   
-  if (is.null(my_lab_sequences) || !nzchar(my_lab_sequences)) {
+  if (is.null(my_lab_sequences) || length(my_lab_sequences) == 0) {
+    message("No custom sequences file provided; skipping custom sequence merge.")
+    return(invisible(NULL))
+  }
+  
+  if (!is.character(my_lab_sequences) || length(my_lab_sequences) != 1) {
+    stop(
+      "my_lab_sequences must be a single file path, not a loaded data frame/table.\n",
+      "Use:\n",
+      '  my_lab_sequences <- "/Users/scott/Desktop/dactylonectria_extracted_sequences.tsv"'
+    )
+  }
+  
+  if (!nzchar(my_lab_sequences)) {
     message("No custom sequences file provided; skipping custom sequence merge.")
     return(invisible(NULL))
   }
@@ -737,8 +750,22 @@ merge_metadata_with_custom_file <- function(project_name,
     stop("Custom sequences file not found: ", my_lab_sequences)
   }
   
-  metadata_database <- read.csv(metadata_file_path, stringsAsFactors = FALSE)
-  custom_sequences  <- read.csv(my_lab_sequences, stringsAsFactors = FALSE, fill = TRUE)
+  metadata_database <- read.csv(
+    metadata_file_path,
+    stringsAsFactors = FALSE
+  )
+  
+  custom_sequences <- readr::read_delim(
+    my_lab_sequences,
+    delim = ifelse(
+      grepl("\\.tsv$|\\.txt$", my_lab_sequences, ignore.case = TRUE),
+      "\t",
+      ","
+    ),
+    show_col_types = FALSE,
+    col_types = readr::cols(.default = readr::col_character())
+  ) |>
+    as.data.frame()
   
   required_cols <- c("Accession", "strain", "sequence", "organism", "gene")
   missing_required <- setdiff(required_cols, names(custom_sequences))
@@ -748,9 +775,21 @@ merge_metadata_with_custom_file <- function(project_name,
       "Custom file is missing required column(s): ",
       paste(missing_required, collapse = ", "),
       "\nRequired columns are: ",
-      paste(required_cols, collapse = ", ")
+      paste(required_cols, collapse = ", "),
+      "\nDetected columns are: ",
+      paste(names(custom_sequences), collapse = ", ")
     )
   }
+  
+  custom_sequences <- custom_sequences %>%
+    dplyr::mutate(
+      Accession.original = Accession,
+      Accession = dplyr::if_else(
+        duplicated(Accession) | duplicated(Accession, fromLast = TRUE),
+        paste(Accession, gene, sep = "_"),
+        Accession
+      )
+    )
   
   recommended_cols <- c(
     "product",
@@ -770,15 +809,18 @@ merge_metadata_with_custom_file <- function(project_name,
   merged_data <- plyr::rbind.fill(metadata_database, custom_sequences)
   
   merged_data <- merged_data %>%
-    dplyr::distinct(Accession, .keep_all = TRUE)
+    dplyr::distinct(Accession, gene, .keep_all = TRUE)
   
   write.csv(merged_data, metadata_file_path, row.names = FALSE)
   
   message("Merged custom sequences into: ", metadata_file_path)
   message("Custom rows added from: ", my_lab_sequences)
+  message("If duplicate custom accessions were present, they were renamed as Accession_gene.")
+  message("Original custom accession values were preserved in Accession.original.")
   
   invisible(merged_data)
 }
+
 
 # helper fucntion for strain taxonomy pull (part of basic curation)
 add_strain_taxonomy_columns_to_df <- function(meta, overwrite = TRUE) {
@@ -933,7 +975,12 @@ curate_metadata_basic <- function(project_name,
   }
   
   # Optional organism filtering
-  if (!is.null(taxa_of_interest) && length(taxa_of_interest) > 0) {
+  if (!is.null(taxa_of_interest) &&
+      length(taxa_of_interest) > 0 &&
+      any(!is.na(taxa_of_interest) & nzchar(taxa_of_interest))) {
+    
+    taxa_of_interest <- taxa_of_interest[!is.na(taxa_of_interest) & nzchar(taxa_of_interest)]
+    
     pat <- paste0("^(", paste(taxa_of_interest, collapse = "|"), ")\\b")
     accession_list <- accession_list[grepl(pat, accession_list$organism), ]
   }
@@ -2713,765 +2760,13 @@ run_host_assessment_summary <- function(
 
 
 
+
 # ============================================================
 # Phylogeny creation functions
 # ============================================================
 
-curate_metadata_regions <- function(project_name,
-                                    mapping_file = NULL) {
-  
-  # Resolve default mapping file location
-  if (is.null(mapping_file) || !nzchar(mapping_file)) {
-    arborist_root <- get0("arborist_repo",
-                          envir      = .GlobalEnv,
-                          ifnotfound = normalizePath("~/github/aRborist", mustWork = FALSE))
-    
-    mapping_file <- file.path(arborist_root, "example_data", "region_replacement_patterns.csv")
-  }
-  
-  # 0) read the input from the basic curation step
-  infile  <- paste0("./metadata_files/all_accessions_pulled_metadata_",
-                    project_name, "_curated.csv")
-  acc_df  <- read.csv(infile, header = TRUE, stringsAsFactors = FALSE)
-  
-  # 1) set up the component columns we actually want to keep
-  acc_df$gene.region.components      <- NA_character_
-  acc_df$product.region.components   <- NA_character_
-  acc_df$acc_title.region.components <- NA_character_
-  
-  # 2) load user/packaged mapping file, if file isn't found there are basic backup patterns
-  if (file.exists(mapping_file)) {
-    message("Using region replacement patterns from: ", mapping_file)
-    map_df <- read.csv(mapping_file, stringsAsFactors = FALSE)
-  } else {
-    warning("Mapping file not found at: ", mapping_file,
-            "\nFalling back to built-in defaults. To customize mappings, copy and edit ",
-            "'example_data/region_replacement_patterns.csv' in your aRborist repo.")
-    map_df <- data.frame(
-      pattern = c(
-        "tef-*\\d*", "EF1-alpha", "ef1a",
-        "b-tub", "TUB2",
-        "RBP2", "RPB2",
-        "RBP1", "RPB1",
-        "elongation factor 1",
-        "internal transcribed",
-        "26S", "28S",
-        "small subunit ribosomal",
-        "large[st]* subunit ribosomal",
-        "beta-tubulin",
-        "actin beta",
-        "licensing\\D*7\\D*",
-        "polymerase II larg[est]*",
-        "polymerase II second largest",
-        "large subunit ribosomal"
-      ),
-      standard = c(
-        "TEF", "TEF", "TEF",
-        "BTUB", "BTUB",
-        "RPB2", "RPB2",
-        "RPB1", "RPB1",
-        "TEF",
-        "ITS",
-        "LSU", "LSU",
-        "SSU",
-        "LSU",
-        "BTUB",
-        "actin",
-        "MCM7",
-        "RPB1",
-        "RPB2",
-        "LSU"
-      ),
-      stringsAsFactors = FALSE
-    )
-  }
-  
-  # helper to append a new component to an existing semicolon list
-  append_component <- function(current, add) {
-    if (is.na(current) || current == "") {
-      add
-    } else {
-      # avoid duplicates like ITS;ITS
-      pattern <- paste0("(^|;)", add, "($|;)")
-      if (grepl(pattern, current)) {
-        current
-      } else {
-        paste(current, add, sep = ";")
-      }
-    }
-  }
-  
-  # 3) CSV-based replacements: accumulate matches instead of overwriting
-  for (i in seq_len(nrow(map_df))) {
-    pat <- map_df$pattern[i]
-    std <- map_df$standard[i]
-    
-    # gene column
-    hit_gene <- stringr::str_detect(acc_df$gene,
-                                    stringr::regex(pat, ignore_case = TRUE))
-    if (any(hit_gene)) {
-      current_vals <- acc_df$gene.region.components[hit_gene]
-      acc_df$gene.region.components[hit_gene] <- mapply(
-        append_component, current_vals, std, USE.NAMES = FALSE
-      )
-    }
-    
-    # product column
-    hit_prod <- stringr::str_detect(acc_df$product,
-                                    stringr::regex(pat, ignore_case = TRUE))
-    if (any(hit_prod)) {
-      current_vals <- acc_df$product.region.components[hit_prod]
-      acc_df$product.region.components[hit_prod] <- mapply(
-        append_component, current_vals, std, USE.NAMES = FALSE
-      )
-    }
-    
-    # accession title column
-    hit_title <- stringr::str_detect(acc_df$accession_title,
-                                     stringr::regex(pat, ignore_case = TRUE))
-    if (any(hit_title)) {
-      current_vals <- acc_df$acc_title.region.components[hit_title]
-      acc_df$acc_title.region.components[hit_title] <- mapply(
-        append_component, current_vals, std, USE.NAMES = FALSE
-      )
-    }
-  }
-  
-  # 4) backup default component search (fills only blanks, super basic)
-  detect_components <- function(txt) {
-    if (is.null(txt) || is.na(txt) || txt == "") return(NA_character_)
-    
-    patterns <- list(
-      ITS = stringr::regex("internal transcribed spacer|\\bITS\\b", ignore_case = TRUE),
-      SSU = stringr::regex("18S|small subunit ribosomal", ignore_case = TRUE),
-      LSU = stringr::regex("28S|large subunit ribosomal|26S", ignore_case = TRUE)
-    )
-    
-    found <- character(0)
-    for (nm in names(patterns)) {
-      if (stringr::str_detect(txt, patterns[[nm]])) {
-        found <- c(found, nm)
-      }
-    }
-    found <- unique(found)
-    if (length(found) == 0) {
-      return(NA_character_)
-    } else {
-      paste(found, collapse = ";")
-    }
-  }
-  
-  for (row_i in seq_len(nrow(acc_df))) {
-    # gene
-    if (is.na(acc_df$gene.region.components[row_i]) || acc_df$gene.region.components[row_i] == "") {
-      comp <- detect_components(acc_df$gene[row_i])
-      if (!is.na(comp)) acc_df$gene.region.components[row_i] <- comp
-    }
-    
-    # product
-    if (is.na(acc_df$product.region.components[row_i]) || acc_df$product.region.components[row_i] == "") {
-      comp <- detect_components(acc_df$product[row_i])
-      if (!is.na(comp)) acc_df$product.region.components[row_i] <- comp
-    }
-    
-    # accession title
-    if (is.na(acc_df$acc_title.region.components[row_i]) || acc_df$acc_title.region.components[row_i] == "") {
-      comp <- detect_components(acc_df$accession_title[row_i])
-      if (!is.na(comp)) acc_df$acc_title.region.components[row_i] <- comp
-    }
-  }
-  
-  # 5) final region assignment from components, in priority order
-  acc_df <- acc_df %>%
-    dplyr::mutate(
-      region.standard = dplyr::coalesce(
-        gene.region.components,
-        product.region.components,
-        acc_title.region.components
-      )
-    )
-  
-  # 6) fasta headers
-  acc_df$fasta.header      <- paste0(">", acc_df$org_name, "_", acc_df$strain.standard)
-  acc_df$fasta.header.type <- paste0(">", acc_df$org_name, "_", acc_df$strain.standard.type)
-  
-  # 7) log unmatched rows
-  unmatched_idx <- which(is.na(acc_df$region.standard) | acc_df$region.standard == "")
-  if (length(unmatched_idx) > 0) {
-    desired_cols <- c(
-      "accession", "Accession",
-      "gene", "product", "accession_title",
-      "gene.region.components",
-      "product.region.components",
-      "acc_title.region.components",
-      "org_name", "strain.standard"
-    )
-    cols_to_log <- intersect(desired_cols, colnames(acc_df))
-    unmatched_df <- acc_df[unmatched_idx, cols_to_log, drop = FALSE]
-    
-    unmatched_file <- paste0("./metadata_files/unmatched_regions_",
-                             project_name, ".csv")
-    write.csv(unmatched_df, unmatched_file, row.names = FALSE)
-    
-    message("Some records did not match any region pattern. ",
-            "These were written to: ", unmatched_file)
-  }
-  
-  # 8) write final curated metadata
-  outfile <- paste0("./metadata_files/all_accessions_pulled_metadata_",
-                    project_name, "_curated.csv")
-  write.csv(acc_df, outfile, row.names = FALSE)
-  cat("Wrote region-curated metadata to:", outfile, "\n")
-}
 
-# filtering metadata to only selected regions
-select_regions <- function(project_name,
-                           regions_to_include,
-                           acc_to_exclude = character(0),
-                           min_region_requirement = length(regions_to_include)) {
-  
-  if (!exists("base_dir", envir = .GlobalEnv)) {
-    stop("`base_dir` is not defined. Run start_project() first.")
-  }
-  
-  # Canonicalize regions + region-set name
-  regions_to_include <- sort_regions(regions_to_include)
-  region_set_name    <- paste(regions_to_include, collapse = ".")
-  
-  # 1) Define input path to curated metadata
-  input_path <- file.path(
-    base_dir,
-    "metadata_files",
-    paste0("all_accessions_pulled_metadata_", project_name, "_curated.csv")
-  )
-  if (!file.exists(input_path)) {
-    stop("Curated metadata not found at: ", input_path)
-  }
-  
-  accession_list <- read.csv(input_path, header = TRUE, stringsAsFactors = FALSE)
-  
-  # 2) Define region-set name and output directory
-  phylo_dir <- file.path(base_dir, "phylogenies", region_set_name)
-  if (!dir.exists(phylo_dir)) dir.create(phylo_dir, recursive = TRUE)
-  
-  # 3) Optional exclusion of specific accessions
-  if (!is.null(acc_to_exclude) && length(acc_to_exclude) > 0 && any(acc_to_exclude != "")) {
-    accession_list <- accession_list[!accession_list$Accession %in% acc_to_exclude, ]
-  }
-  
-  # 4) Filter: keep only desired regions
-  multifasta_prep <- accession_list[accession_list$region.standard %in% regions_to_include, ]
-  
-  # 5) Write "long" filtered file (per accession)
-  output_long <- file.path(
-    phylo_dir,
-    paste0("selected_accessions_metadata_", project_name, ".", region_set_name, ".csv")
-  )
-  write.csv(multifasta_prep, output_long, row.names = FALSE)
-  
-  # 6) Create "wide" region attendance table
-  multifasta_prep_complete <- subset(
-    multifasta_prep,
-    select = c(strain.standard.type, organism, Accession, region.standard)
-  )
-  
-  multifasta_prep_select <- dplyr::distinct(
-    multifasta_prep_complete,
-    strain.standard.type, region.standard,
-    .keep_all = TRUE
-  )
-  
-  select_region_attendance <- tidyr::pivot_wider(
-    multifasta_prep_select,
-    names_from = "region.standard",
-    values_from = "Accession"
-  )
-  
-  # 7) Apply minimum region inclusion threshold
-  select_region_attendance_filtered <- select_region_attendance %>%
-    dplyr::mutate(
-      total = rowSums(!is.na(dplyr::select(., tidyselect::any_of(regions_to_include))))
-    ) %>%
-    dplyr::filter(total >= min_region_requirement) %>%
-    dplyr::select(-total)
-  
-  output_wide <- file.path(
-    phylo_dir,
-    paste0("Region_attendance_sheet_", project_name, ".", region_set_name, ".csv")
-  )
-  write.csv(select_region_attendance_filtered, output_wide, row.names = FALSE)
-  
-  # 8) Messages for user
-  message("✓ Filtered metadata written to: ", output_long)
-  message("✓ Region attendance sheet written to: ", output_wide)
-  message("✓ Region set: ", region_set_name)
-}
-
-create_multifastas <- function(project_name,
-                               regions_to_include) {
-  if (!exists("base_dir", envir = .GlobalEnv)) {
-    stop("`base_dir` is not defined. Run start_project() first.")
-  }
-  
-  # Canonicalize regions + region-set name
-  regions_to_include <- sort_regions(regions_to_include)
-  region_set_name    <- paste(regions_to_include, collapse = ".")
-  
-  # 0) get region set and folders
-  phylo_dir <- file.path(base_dir, "phylogenies", region_set_name)
-  if (!dir.exists(phylo_dir)) {
-    stop("Expected region-set folder not found: ", phylo_dir,
-         "\nDid you run select_regions() for this region set?")
-  }
-  
-  prep_dir <- file.path(phylo_dir, "prep")
-  if (!dir.exists(prep_dir)) dir.create(prep_dir, recursive = TRUE)
-  
-  # One subfolder per region (downstream: raw, aligned, trimmed files live here)
-  for (rg in regions_to_include) {
-    rg_dir <- file.path(prep_dir, rg)
-    if (!dir.exists(rg_dir)) dir.create(rg_dir, recursive = TRUE)
-  }
-  
-  # 1) Load inputs created by select_regions()
-  attendance_path <- file.path(
-    phylo_dir,
-    paste0("Region_attendance_sheet_", project_name, ".", region_set_name, ".csv")
-  )
-  long_filtered_path <- file.path(
-    phylo_dir,
-    paste0("selected_accessions_metadata_", project_name, ".", region_set_name, ".csv")
-  )
-  
-  if (!file.exists(attendance_path)) {
-    stop("Region attendance sheet not found: ", attendance_path)
-  }
-  if (!file.exists(long_filtered_path)) {
-    stop("Filtered metadata (long) not found: ", long_filtered_path)
-  }
-  
-  region_attendance <- read.csv(attendance_path, header = TRUE, stringsAsFactors = FALSE)
-  filtered_long <- read.csv(long_filtered_path, header = TRUE, stringsAsFactors = FALSE)
-  
-  # Sanity checks on needed columns
-  needed_cols <- c("Accession", "region.standard", "fasta.header.type", "sequence")
-  missing_cols <- setdiff(needed_cols, colnames(filtered_long))
-  if (length(missing_cols) > 0) {
-    stop("Missing columns in filtered metadata: ", paste(missing_cols, collapse = ", "),
-         "\nUpstream curation must provide these.")
-  }
-  
-  # 2) Build per-region accession vectors from the wide attendance sheet
-  region_cols <- intersect(regions_to_include, colnames(region_attendance))
-  if (length(region_cols) == 0) {
-    stop("None of the requested regions are present as columns in the attendance sheet.")
-  }
-  
-  # Collect per-region accession IDs (drop NAs), preserving strain/region mapping done upstream
-  region_accessions <- lapply(region_cols, function(rg) {
-    unique(na.omit(region_attendance[[rg]]))
-  })
-  names(region_accessions) <- region_cols
-  
-  # 3) For each region, subset sequences and write a multifasta into prep/<region>/
-  manifest <- data.frame(
-    region = character(0),
-    n_sequences = integer(0),
-    fasta_path = character(0),
-    stringsAsFactors = FALSE
-  )
-  
-  for (rg in names(region_accessions)) {
-    acc_vec <- region_accessions[[rg]]
-    if (length(acc_vec) == 0) {
-      message("No accessions found for region: ", rg, " (skipping).")
-      next
-    }
-    
-    sub_df <- filtered_long[filtered_long$Accession %in% acc_vec &
-                              filtered_long$region.standard == rg, ]
-    
-    # Drop rows with missing sequences
-    sub_df <- sub_df[!is.na(sub_df$sequence) & sub_df$sequence != "", ]
-    
-    # Order by header (stable, human-friendly)
-    sub_df <- sub_df[order(sub_df$fasta.header.type, decreasing = FALSE), ]
-    
-    # Ensure headers begin with '>'
-    headers <- sub_df$fasta.header.type
-    needs_gt <- !startsWith(headers, ">")
-    headers[needs_gt] <- paste0(">", headers[needs_gt])
-    
-    # Interleave header/sequence to write a simple FASTA
-    seqs_fasta <- c(rbind(headers, sub_df$sequence))
-    
-    rg_dir <- file.path(prep_dir, rg)
-    fasta_name <- paste0(project_name, ".", region_set_name, "_", rg, ".raw.fasta")
-    fasta_path <- file.path(rg_dir, fasta_name)
-    
-    writeLines(seqs_fasta, con = fasta_path)
-    message("Created multifasta for region ", rg, ": ", fasta_path)
-    
-    manifest <- rbind(
-      manifest,
-      data.frame(region = rg,
-                 n_sequences = nrow(sub_df),
-                 fasta_path = fasta_path,
-                 stringsAsFactors = FALSE)
-    )
-  }
-  
-  # 4) Write a small manifest for bookkeeping/QC
-  manifest_path <- file.path(prep_dir, paste0("multifasta_manifest_", project_name, ".", region_set_name, ".tsv"))
-  write.table(manifest, manifest_path, sep = "\t", quote = FALSE, row.names = FALSE)
-  message("Wrote manifest: ", manifest_path)
-  
-  invisible(manifest)
-}
-
-align_regions_mafft <- function(project_name,
-                                regions_to_include,
-                                threads = max(1, parallel::detectCores() - 1),
-                                mafft_args = c("--auto", "--reorder"),
-                                force = FALSE) {
-  if (!exists("base_dir", envir = .GlobalEnv)) {
-    stop("`base_dir` is not defined. Run start_project() first.")
-  }
-  
-  # Canonicalize regions + region-set name
-  regions_to_include <- sort_regions(regions_to_include)
-  region_set_name    <- paste(regions_to_include, collapse = ".")
-  
-  # 0) Determine MAFFT executable path
-  mafft_path <- Sys.getenv("MAFFT_PATH", unset = "mafft")
-  
-  # Verify MAFFT works before starting
-  check_result <- suppressWarnings(system2(mafft_path, "--version", stdout = TRUE, stderr = TRUE))
-  if (length(check_result) == 0 || grepl("not found|No such file", check_result[1], ignore.case = TRUE)) {
-    stop(
-      "MAFFT not found. Please install it or set MAFFT_PATH in your .Renviron file.\n",
-      "Example:  MAFFT_PATH=/usr/local/bin/mafft\n",
-      "Then restart R and rerun this command."
-    )
-  } else {
-    message("Using MAFFT executable: ", mafft_path)
-  }
-  
-  # 1) Folder setup
-  phylo_dir <- file.path(base_dir, "phylogenies", region_set_name)
-  prep_dir  <- file.path(phylo_dir, "prep")
-  if (!dir.exists(prep_dir)) {
-    stop("Prep directory not found: ", prep_dir,
-         "\nDid you run create_multifastas() for this region set?")
-  }
-  
-  manifest <- data.frame(
-    region     = character(0),
-    raw_fasta  = character(0),
-    aligned_fasta = character(0),
-    log_path   = character(0),
-    status     = character(0),
-    stringsAsFactors = FALSE
-  )
-  
-  # 2) Loop through regions
-  for (rg in regions_to_include) {
-    rg_dir <- file.path(prep_dir, rg)
-    if (!dir.exists(rg_dir)) {
-      warning("Region prep folder missing (skipping): ", rg_dir)
-      next
-    }
-    
-    raw_fa <- file.path(rg_dir, paste0(project_name, ".", region_set_name, "_", rg, ".raw.fasta"))
-    aln_fa <- file.path(rg_dir, paste0(project_name, ".", region_set_name, "_", rg, ".aligned.fasta"))
-    log_fp <- file.path(rg_dir, paste0(project_name, ".", region_set_name, "_", rg, ".mafft.log"))
-    
-    if (!file.exists(raw_fa)) {
-      warning("Raw FASTA not found for region ", rg, ": ", raw_fa)
-      manifest <- rbind(manifest, data.frame(
-        region = rg, raw_fasta = raw_fa, aligned_fasta = NA, log_path = log_fp, status = "missing_raw",
-        stringsAsFactors = FALSE
-      ))
-      next
-    }
-    
-    if (file.exists(aln_fa) && !force) {
-      message("Aligned FASTA already exists (use force=TRUE to overwrite): ", aln_fa)
-      manifest <- rbind(manifest, data.frame(
-        region = rg, raw_fasta = raw_fa, aligned_fasta = aln_fa, log_path = log_fp, status = "skipped_exists",
-        stringsAsFactors = FALSE
-      ))
-      next
-    }
-    
-    # 3) Run MAFFT alignment
-    message("Running MAFFT for region ", rg, " …")
-    
-    mafft_args_full <- c("--thread", as.character(threads), mafft_args, raw_fa)
-    
-    exit_code <- tryCatch({
-      system2(command = mafft_path,
-              args    = mafft_args_full,
-              stdout  = aln_fa,
-              stderr  = log_fp)
-    }, error = function(e) {
-      warning("MAFFT invocation failed for ", rg, ": ", conditionMessage(e))
-      return(1L)
-    })
-    
-    status <- if (!is.null(exit_code) && exit_code == 0L && file.exists(aln_fa)) "ok" else "failed"
-    
-    manifest <- rbind(manifest, data.frame(
-      region = rg,
-      raw_fasta = raw_fa,
-      aligned_fasta = if (file.exists(aln_fa)) aln_fa else NA,
-      log_path = log_fp,
-      status = status,
-      stringsAsFactors = FALSE
-    ))
-    
-    if (status != "ok") {
-      warning("MAFFT failed for region ", rg, ". See log: ", log_fp)
-    } else {
-      message("✓ Aligned FASTA written: ", aln_fa)
-    }
-  }
-  
-  # 4) Write alignment manifest
-  align_manifest <- file.path(prep_dir, paste0("alignment_manifest_", project_name, ".", region_set_name, ".tsv"))
-  write.table(manifest, align_manifest, sep = "\t", quote = FALSE, row.names = FALSE)
-  message("Alignment manifest: ", align_manifest)
-  
-  invisible(manifest)
-}
-
-trim_regions_trimal <- function(project_name,
-                                regions_to_include,
-                                trimal_args = c("--automated1"),
-                                force = FALSE) {
-  if (!exists("base_dir", envir = .GlobalEnv)) {
-    stop("`base_dir` is not defined. Run start_project() first.")
-  }
-  
-  # Canonicalize regions + region-set name
-  regions_to_include <- sort_regions(regions_to_include)
-  region_set_name    <- paste(regions_to_include, collapse = ".")
-  
-  # 0) Determine trimAl path
-  trimal_path <- Sys.getenv("TRIMAL_PATH", unset = "trimal")
-  
-  # Verify that trimAl runs
-  check_result <- suppressWarnings(system2(trimal_path, "--version", stdout = TRUE, stderr = TRUE))
-  if (length(check_result) == 0 || grepl("not found|No such file", check_result[1], ignore.case = TRUE)) {
-    stop(
-      "trimAl not found. Please install it or set TRIMAL_PATH in your .Renviron file.\n",
-      "Example:  TRIMAL_PATH=/usr/local/bin/trimal\n",
-      "Then restart R and rerun this command."
-    )
-  } else {
-    message("Using trimAl executable: ", trimal_path)
-  }
-  
-  # 1) Folder setup
-  phylo_dir <- file.path(base_dir, "phylogenies", region_set_name)
-  prep_dir  <- file.path(phylo_dir, "prep")
-  if (!dir.exists(prep_dir)) {
-    stop("Prep directory not found: ", prep_dir,
-         "\nDid you run align_regions_mafft() for this region set?")
-  }
-  
-  manifest <- data.frame(
-    region     = character(0),
-    aligned_fasta = character(0),
-    trimmed_fasta = character(0),
-    log_path   = character(0),
-    status     = character(0),
-    stringsAsFactors = FALSE
-  )
-  
-  # 2) Loop through regions
-  for (rg in regions_to_include) {
-    rg_dir <- file.path(prep_dir, rg)
-    aln_fa <- file.path(rg_dir, paste0(project_name, ".", region_set_name, "_", rg, ".aligned.fasta"))
-    trimmed_fa <- file.path(rg_dir, paste0(project_name, ".", region_set_name, "_", rg, ".trimmed.fasta"))
-    log_fp <- file.path(rg_dir, paste0(project_name, ".", region_set_name, "_", rg, ".trimal.log"))
-    
-    if (!file.exists(aln_fa)) {
-      warning("Aligned FASTA not found for region ", rg, ": ", aln_fa)
-      next
-    }
-    
-    if (file.exists(trimmed_fa) && !force) {
-      message("Trimmed FASTA already exists (use force=TRUE to overwrite): ", trimmed_fa)
-      manifest <- rbind(manifest, data.frame(
-        region = rg,
-        aligned_fasta = aln_fa,
-        trimmed_fasta = trimmed_fa,
-        log_path = log_fp,
-        status = "skipped_exists",
-        stringsAsFactors = FALSE
-      ))
-      next
-    }
-    
-    # 3) Run trimAl
-    message("Running trimAl for region ", rg, " …")
-    
-    trimal_args_full <- c(trimal_args, "-in", aln_fa, "-out", trimmed_fa)
-    exit_code <- tryCatch({
-      system2(command = trimal_path,
-              args    = trimal_args_full,
-              stdout  = log_fp,
-              stderr  = log_fp)
-    }, error = function(e) {
-      warning("trimAl invocation failed for ", rg, ": ", conditionMessage(e))
-      return(1L)
-    })
-    
-    status <- if (!is.null(exit_code) && exit_code == 0L && file.exists(trimmed_fa)) "ok" else "failed"
-    
-    manifest <- rbind(manifest, data.frame(
-      region = rg,
-      aligned_fasta = aln_fa,
-      trimmed_fasta = if (file.exists(trimmed_fa)) trimmed_fa else NA,
-      log_path = log_fp,
-      status = status,
-      stringsAsFactors = FALSE
-    ))
-    
-    if (status != "ok") {
-      warning("trimAl failed for region ", rg, ". See log: ", log_fp)
-    } else {
-      message("✓ Trimmed FASTA written: ", trimmed_fa)
-    }
-  }
-  
-  # 4) Write manifest
-  trim_manifest <- file.path(prep_dir, paste0("trim_manifest_", project_name, ".", region_set_name, ".tsv"))
-  write.table(manifest, trim_manifest, sep = "\t", quote = FALSE, row.names = FALSE)
-  message("Trim manifest: ", trim_manifest)
-  
-  invisible(manifest)
-}
-
-# running IQTREE modelfinder step for single region 
-iqtree_modelfinder_per_region <- function(project_name,
-                                          regions_to_include,
-                                          threads    = max(1, parallel::detectCores() - 1),
-                                          iqtree_args = c("-m", "MFP+MERGE", "-nt", "AUTO", "-quiet"),
-                                          single_gene_bootstraps = 1000,
-                                          force = FALSE) {
-  
-  if (!exists("base_dir", envir = .GlobalEnv)) {
-    stop("`base_dir` is not defined. Run start_project() first.")
-  }
-  
-  # 0) IQ-TREE software check
-  iqtree_bin <- Sys.getenv("IQTREE_PATH")
-  if (!nzchar(iqtree_bin)) {
-    stop("IQTREE_PATH is not set in .Renviron.")
-  }
-  suppressWarnings(system2(iqtree_bin, "-version"))
-  
-  # Canonicalize regions + region-set name
-  regions_to_include <- sort_regions(regions_to_include)
-  region_set_name    <- paste(regions_to_include, collapse = ".")
-  
-  # 1) Paths
-  phylo_dir <- file.path(base_dir, "phylogenies", region_set_name)
-  prep_dir  <- file.path(phylo_dir, "prep")
-  single_gene_dir <- file.path(phylo_dir, "single_gene_trees")
-  multi_gene_dir  <- file.path(phylo_dir, "multi_gene_trees")
-  
-  if (!dir.exists(prep_dir)) stop("Prep directory not found: ", prep_dir)
-  if (!dir.exists(single_gene_dir)) dir.create(single_gene_dir, recursive = TRUE)
-  if (!dir.exists(multi_gene_dir)) dir.create(multi_gene_dir, recursive = TRUE)
-  
-  results <- list()
-  
-  # 2) Loop over regions
-  for (rg in regions_to_include) {
-    rg_prep_dir <- file.path(prep_dir, rg)
-    trimmed_fa <- file.path(
-      rg_prep_dir,
-      paste0(project_name, ".", region_set_name, "_", rg, ".trimmed.fasta")
-    )
-    
-    if (!file.exists(trimmed_fa)) {
-      warning("Missing trimmed alignment for region ", rg)
-      next
-    }
-    
-    # Output location for single-gene IQ-TREE result
-    rg_sg_dir <- file.path(single_gene_dir, rg)
-    if (!dir.exists(rg_sg_dir)) dir.create(rg_sg_dir, recursive = TRUE)
-    
-    prefix_base <- paste0(project_name, ".", region_set_name, "_", rg, ".modeltest")
-    prefix      <- file.path(rg_sg_dir, prefix_base)
-    iqtreefile  <- paste0(prefix, ".iqtree")
-    
-    # 3) Run IQ-TREE (ModelFinder + bootstraps)
-    if (!file.exists(iqtreefile) || force) {
-      
-      args <- c(
-        "-s", trimmed_fa,
-        "-pre", prefix,
-        "-bb", as.character(single_gene_bootstraps)
-      )
-      
-      # Add -nt <threads> unless user set -nt in iqtree_args
-      if (!any(iqtree_args == "-nt")) {
-        args <- c(args, "-nt", as.character(threads))
-      }
-      
-      # Add user-specified options
-      args <- c(args, iqtree_args)
-      
-      message("Running ModelFinder with UF bootstraps for region ", rg, " …")
-      system2(iqtree_bin, args, stdout = TRUE, stderr = TRUE)
-    }
-    
-    # 4) Extract best model
-    iqtxt <- readLines(iqtreefile, warn = FALSE)
-    model_idx <- grep("Best-fit model according to BIC:", iqtxt, fixed = TRUE)
-    
-    if (length(model_idx) == 0L) {
-      best_model <- NA_character_
-      warning("Could not find model line in ", iqtreefile)
-    } else {
-      best_line <- iqtxt[model_idx[1]]
-      best_model <- stringr::str_trim(sub(".*Best-fit model according to BIC:\\s*", "",
-                                          best_line))
-    }
-    
-    # alignment length
-    aln <- Biostrings::readDNAStringSet(trimmed_fa)
-    aln_length <- unique(Biostrings::width(aln))[1]
-    
-    results[[rg]] <- data.frame(
-      region      = rg,
-      best_model  = best_model,
-      aln_length  = aln_length,
-      iqtree_file = iqtreefile,
-      stringsAsFactors = FALSE
-    )
-  }
-  
-  # 5) Output TSV to multi_gene_trees folder
-  model_fits <- dplyr::bind_rows(results)
-  
-  out_tsv <- file.path(
-    multi_gene_dir,
-    paste0("model_fits_", project_name, ".", region_set_name, ".tsv")
-  )
-  
-  readr::write_tsv(model_fits, out_tsv)
-  message("ModelFinder summary written to: ", out_tsv)
-  
-  invisible(model_fits)
-}
-
-# Create Projects/<project_name>/ and run your normal structure inside it.
+# Create Projects/<project_name>/ and run normal structure inside it
 if (!exists("arborist_repo", envir = .GlobalEnv)) {
   arborist_repo <- normalizePath("~/github/aRborist")
 }
@@ -3505,38 +2800,1993 @@ start_project <- function(project_name,
   invisible(normalizePath(base_dir))
 }
 
-concatenate_and_write_partitions <- function(project_name,
-                                             regions_to_include) {
+# option to flag accessions from literature
+flag_literature_accessions <- function(project_name,
+                                       literature_accessions = NULL,
+                                       curated_metadata_file = NULL) {
+  if (is.null(literature_accessions) || literature_accessions == "") {
+    message("No literature accession table supplied. Skipping.")
+    return(invisible(NULL))
+  }
+  
+  if (is.null(curated_metadata_file)) {
+    curated_metadata_file <- file.path(
+      "metadata_files",
+      paste0("all_accessions_pulled_metadata_", project_name, "_curated.csv")
+    )
+  }
+  
+  metadata <- read.csv(curated_metadata_file, stringsAsFactors = FALSE, check.names = FALSE)
+  
+  lit <- read.table(
+    literature_accessions,
+    header = TRUE,
+    sep = "\t",
+    stringsAsFactors = FALSE,
+    check.names = FALSE,
+    quote = "",
+    comment.char = ""
+  )
+  
+  required_cols <- c("paper_id", "region", "accession")
+  missing_cols <- setdiff(required_cols, names(lit))
+  
+  if (length(missing_cols) > 0) {
+    stop(
+      "Literature accession table is missing required column(s): ",
+      paste(missing_cols, collapse = ", ")
+    )
+  }
+  
+  if (!"Accession" %in% names(metadata)) {
+    stop("Metadata file must contain an 'Accession' column.")
+  }
+  
+  lit$accession <- trimws(lit$accession)
+  lit$region <- trimws(lit$region)
+  lit$paper_id <- trimws(lit$paper_id)
+  
+  metadata$Accession <- trimws(metadata$Accession)
+  
+  if (!"literature_accession" %in% names(metadata)) {
+    metadata$literature_accession <- FALSE
+  }
+  
+  if (!"literature_source" %in% names(metadata)) {
+    metadata$literature_source <- NA_character_
+  }
+  
+  if (!"literature_region" %in% names(metadata)) {
+    metadata$literature_region <- NA_character_
+  }
+  
+  matched <- lit[lit$accession %in% metadata$Accession, , drop = FALSE]
+  missing <- lit[!lit$accession %in% metadata$Accession, , drop = FALSE]
+  
+  for (acc in unique(matched$accession)) {
+    hit_rows <- which(metadata$Accession == acc)
+    lit_rows <- matched[matched$accession == acc, , drop = FALSE]
+    
+    sources <- paste(unique(lit_rows$paper_id), collapse = "; ")
+    regions <- paste(unique(lit_rows$region), collapse = "; ")
+    
+    metadata$literature_accession[hit_rows] <- TRUE
+    metadata$literature_source[hit_rows] <- sources
+    metadata$literature_region[hit_rows] <- regions
+  }
+  
+  write.csv(metadata, curated_metadata_file, row.names = FALSE, na = "")
+  
+  missing_file <- file.path(
+    "metadata_files",
+    paste0("missing_literature_accessions_", project_name, ".csv")
+  )
+  
+  write.csv(missing, missing_file, row.names = FALSE, na = "")
+  
+  message("Literature accession flagging complete.")
+  message("Updated curated metadata: ", curated_metadata_file)
+  message("Missing literature accessions written to: ", missing_file)
+  
+  invisible(metadata)
+}
+
+
+
+# curating region data
+curate_metadata_regions <- function(project_name,
+                                    mapping_file = NULL,
+                                    title_priority_regions = c("ITS", "LSU", "SSU")) {
+  
+  if (is.null(mapping_file) || !nzchar(mapping_file)) {
+    arborist_root <- get0(
+      "arborist_repo",
+      envir = .GlobalEnv,
+      ifnotfound = normalizePath("~/github/aRborist", mustWork = FALSE)
+    )
+    
+    mapping_file <- file.path(
+      arborist_root,
+      "example_data",
+      "region_replacement_patterns.csv"
+    )
+  }
+  
+  infile <- paste0(
+    "./metadata_files/all_accessions_pulled_metadata_",
+    project_name,
+    "_curated.csv"
+  )
+  
+  acc_df <- read.csv(
+    infile,
+    header = TRUE,
+    stringsAsFactors = FALSE,
+    check.names = FALSE
+  )
+  
+  acc_df$gene.region.components <- NA_character_
+  acc_df$product.region.components <- NA_character_
+  acc_df$acc_title.region.components <- NA_character_
+  
+  if (file.exists(mapping_file)) {
+    message("Using region replacement patterns from: ", mapping_file)
+    map_df <- read.csv(mapping_file, stringsAsFactors = FALSE)
+  } else {
+    stop("Mapping file not found: ", mapping_file)
+  }
+  
+  append_component <- function(current, add) {
+    if (is.na(current) || current == "") {
+      return(add)
+    }
+    
+    current_parts <- trimws(unlist(strsplit(current, ";")))
+    
+    if (add %in% current_parts) {
+      return(current)
+    }
+    
+    paste(c(current_parts, add), collapse = ";")
+  }
+  
+  make_safe_pattern <- function(pat) {
+    pat <- trimws(pat)
+    
+    # If the user supplied explicit regex syntax, respect it.
+    if (grepl("\\\\b|\\[|\\]|\\(|\\)|\\||\\+|\\*|\\?|\\{", pat)) {
+      return(pat)
+    }
+    
+    # Very short gene symbols need word boundaries.
+    if (grepl("^[A-Za-z0-9]+$", pat) && nchar(pat) <= 5) {
+      return(paste0("\\b", pat, "\\b"))
+    }
+    
+    # Plain words/phrases should not match inside larger words.
+    paste0("\\b", gsub(" +", "\\\\s+", pat), "\\b")
+  }
+  
+  safe_detect <- function(x, pat) {
+    if (is.null(x)) return(rep(FALSE, length(x)))
+    
+    pat_safe <- make_safe_pattern(pat)
+    
+    out <- stringr::str_detect(
+      x,
+      stringr::regex(pat_safe, ignore_case = TRUE)
+    )
+    
+    out[is.na(out)] <- FALSE
+    out
+  }
+  
+  for (i in seq_len(nrow(map_df))) {
+    pat <- map_df$pattern[i]
+    std <- map_df$standard[i]
+    
+    hit_gene <- safe_detect(acc_df$gene, pat)
+    
+    if (any(hit_gene)) {
+      acc_df$gene.region.components[hit_gene] <- mapply(
+        append_component,
+        acc_df$gene.region.components[hit_gene],
+        std,
+        USE.NAMES = FALSE
+      )
+    }
+    
+    hit_prod <- safe_detect(acc_df$product, pat)
+    
+    if (any(hit_prod)) {
+      acc_df$product.region.components[hit_prod] <- mapply(
+        append_component,
+        acc_df$product.region.components[hit_prod],
+        std,
+        USE.NAMES = FALSE
+      )
+    }
+    
+    hit_title <- safe_detect(acc_df$accession_title, pat)
+    
+    if (any(hit_title)) {
+      acc_df$acc_title.region.components[hit_title] <- mapply(
+        append_component,
+        acc_df$acc_title.region.components[hit_title],
+        std,
+        USE.NAMES = FALSE
+      )
+    }
+  }
+  
+  detect_components <- function(txt) {
+    if (is.null(txt) || is.na(txt) || txt == "") {
+      return(NA_character_)
+    }
+    
+    patterns <- list(
+      ITS = stringr::regex("internal transcribed spacer|\\bITS\\b", ignore_case = TRUE),
+      SSU = stringr::regex("\\b18S\\b|small subunit ribosomal", ignore_case = TRUE),
+      LSU = stringr::regex("\\b28S\\b|\\b26S\\b|large subunit ribosomal", ignore_case = TRUE)
+    )
+    
+    found <- character(0)
+    
+    for (nm in names(patterns)) {
+      if (stringr::str_detect(txt, patterns[[nm]])) {
+        found <- c(found, nm)
+      }
+    }
+    
+    found <- unique(found)
+    
+    if (length(found) == 0) {
+      NA_character_
+    } else {
+      paste(found, collapse = ";")
+    }
+  }
+  
+  for (row_i in seq_len(nrow(acc_df))) {
+    
+    if (is.na(acc_df$gene.region.components[row_i]) ||
+        acc_df$gene.region.components[row_i] == "") {
+      comp <- detect_components(acc_df$gene[row_i])
+      if (!is.na(comp)) acc_df$gene.region.components[row_i] <- comp
+    }
+    
+    if (is.na(acc_df$product.region.components[row_i]) ||
+        acc_df$product.region.components[row_i] == "") {
+      comp <- detect_components(acc_df$product[row_i])
+      if (!is.na(comp)) acc_df$product.region.components[row_i] <- comp
+    }
+    
+    if (is.na(acc_df$acc_title.region.components[row_i]) ||
+        acc_df$acc_title.region.components[row_i] == "") {
+      comp <- detect_components(acc_df$accession_title[row_i])
+      if (!is.na(comp)) acc_df$acc_title.region.components[row_i] <- comp
+    }
+  }
+  
+  filter_title_components <- function(x) {
+    if (is.na(x) || x == "") return(NA_character_)
+    
+    parts <- trimws(unlist(strsplit(x, ";")))
+    parts <- parts[parts %in% title_priority_regions]
+    
+    if (length(parts) == 0) {
+      NA_character_
+    } else {
+      paste(unique(parts), collapse = ";")
+    }
+  }
+  
+  acc_df$acc_title.region.components <- vapply(
+    acc_df$acc_title.region.components,
+    filter_title_components,
+    character(1)
+  )
+  
+  acc_df <- acc_df %>%
+    dplyr::mutate(
+      region.standard = dplyr::coalesce(
+        gene.region.components,
+        product.region.components,
+        acc_title.region.components
+      )
+    )
+  
+  acc_df$fasta.header <- paste0(">", acc_df$org_name, "_", acc_df$strain.standard)
+  acc_df$fasta.header.type <- paste0(">", acc_df$org_name, "_", acc_df$strain.standard.type)
+  
+  unmatched_idx <- which(is.na(acc_df$region.standard) | acc_df$region.standard == "")
+  
+  if (length(unmatched_idx) > 0) {
+    desired_cols <- c(
+      "accession", "Accession",
+      "gene", "product", "accession_title",
+      "gene.region.components",
+      "product.region.components",
+      "acc_title.region.components",
+      "org_name", "strain.standard"
+    )
+    
+    cols_to_log <- intersect(desired_cols, colnames(acc_df))
+    unmatched_df <- acc_df[unmatched_idx, cols_to_log, drop = FALSE]
+    
+    unmatched_file <- paste0(
+      "./metadata_files/unmatched_regions_",
+      project_name,
+      ".csv"
+    )
+    
+    write.csv(unmatched_df, unmatched_file, row.names = FALSE)
+    
+    message(
+      "Some records did not match any region pattern. These were written to: ",
+      unmatched_file
+    )
+  }
+  
+  outfile <- paste0(
+    "./metadata_files/all_accessions_pulled_metadata_",
+    project_name,
+    "_curated.csv"
+  )
+  
+  write.csv(acc_df, outfile, row.names = FALSE)
+  
+  cat("Wrote region-curated metadata to:", outfile, "\n")
+}
+
+
+# filtering metadata to only selected regions
+select_regions <- function(project_name,
+                           regions_to_include,
+                           acc_to_exclude = character(0),
+                           min_region_requirement = length(regions_to_include),
+                           allow_compound_regions_for = c("ITS"),
+                           prefer_literature_accessions = FALSE) {
+  
   if (!exists("base_dir", envir = .GlobalEnv)) {
     stop("`base_dir` is not defined. Run start_project() first.")
   }
   
-  # Canonicalize regions + region-set name
-  regions_to_include <- sort_regions(regions_to_include)
-  region_set_name    <- paste(regions_to_include, collapse = ".")
+  has_region <- function(x, rg) {
+    vapply(
+      strsplit(as.character(x), ";"),
+      function(parts) {
+        rg %in% trimws(parts)
+      },
+      logical(1)
+    )
+  }
   
-  # 0) Paths and region-set name
-  phylo_dir       <- file.path(base_dir, "phylogenies", region_set_name)
-  prep_dir        <- file.path(phylo_dir, "prep")
-  multi_gene_dir  <- file.path(phylo_dir, "multi_gene_trees")
+  region_is_exact <- function(x, rg) {
+    trimws(as.character(x)) == rg
+  }
+  
+  regions_to_include <- sort_regions(regions_to_include)
+  region_set_name <- paste(regions_to_include, collapse = ".")
+  
+  input_path <- file.path(
+    base_dir,
+    "metadata_files",
+    paste0("all_accessions_pulled_metadata_", project_name, "_curated.csv")
+  )
+  
+  if (!file.exists(input_path)) {
+    stop("Curated metadata not found at: ", input_path)
+  }
+  
+  accession_list <- read.csv(
+    input_path,
+    header = TRUE,
+    stringsAsFactors = FALSE,
+    check.names = FALSE
+  )
+  
+  phylo_dir <- file.path(base_dir, "phylogenies", region_set_name)
+  if (!dir.exists(phylo_dir)) dir.create(phylo_dir, recursive = TRUE)
+  
+  if (!is.null(acc_to_exclude) &&
+      length(acc_to_exclude) > 0 &&
+      any(acc_to_exclude != "")) {
+    accession_list <- accession_list[
+      !accession_list$Accession %in% acc_to_exclude,
+      ,
+      drop = FALSE
+    ]
+  }
+  
+  expanded_list <- list()
+  
+  for (rg in regions_to_include) {
+    
+    if (rg %in% allow_compound_regions_for) {
+      rg_keep <- has_region(accession_list$region.standard, rg)
+    } else {
+      rg_keep <- region_is_exact(accession_list$region.standard, rg)
+    }
+    
+    rg_rows <- accession_list[rg_keep, , drop = FALSE]
+    
+    if (nrow(rg_rows) == 0) {
+      next
+    }
+    
+    rg_rows$region.standard.original <- rg_rows$region.standard
+    rg_rows$region.standard <- rg
+    
+    expanded_list[[rg]] <- rg_rows
+  }
+  
+  if (length(expanded_list) == 0) {
+    stop(
+      "No accessions matched the requested regions under the current compound-region policy.\n",
+      "Requested regions: ", paste(regions_to_include, collapse = ", "), "\n",
+      "allow_compound_regions_for: ", paste(allow_compound_regions_for, collapse = ", ")
+    )
+  }
+  
+  multifasta_prep_expanded <- dplyr::bind_rows(expanded_list)
+  
+  output_long <- file.path(
+    phylo_dir,
+    paste0("selected_accessions_metadata_", project_name, ".", region_set_name, ".csv")
+  )
+  
+  write.csv(multifasta_prep_expanded, output_long, row.names = FALSE)
+  
+  cols_to_keep <- c(
+    "strain.standard.type",
+    "organism",
+    "Accession",
+    "region.standard",
+    "literature_accession",
+    "literature_source",
+    "literature_region"
+  )
+  
+  multifasta_prep_complete <- multifasta_prep_expanded[
+    ,
+    intersect(cols_to_keep, names(multifasta_prep_expanded)),
+    drop = FALSE
+  ]
+  
+  has_lit_col <- "literature_accession" %in% names(multifasta_prep_complete)
+  
+  if (has_lit_col) {
+    multifasta_prep_complete$literature_accession[
+      is.na(multifasta_prep_complete$literature_accession)
+    ] <- FALSE
+  }
+  
+  if (prefer_literature_accessions && has_lit_col) {
+    multifasta_prep_complete <- multifasta_prep_complete[
+      order(
+        !multifasta_prep_complete$literature_accession,
+        multifasta_prep_complete$strain.standard.type,
+        multifasta_prep_complete$region.standard,
+        multifasta_prep_complete$Accession
+      ),
+      ,
+      drop = FALSE
+    ]
+  }
+  
+  multifasta_prep_select <- dplyr::distinct(
+    multifasta_prep_complete,
+    strain.standard.type,
+    region.standard,
+    .keep_all = TRUE
+  )
+  
+  select_region_attendance <- tidyr::pivot_wider(
+    multifasta_prep_select,
+    id_cols = c("strain.standard.type", "organism"),
+    names_from = "region.standard",
+    values_from = "Accession"
+  )
+  
+  if (has_lit_col) {
+    
+    lit_summary <- multifasta_prep_complete %>%
+      dplyr::filter(literature_accession == TRUE) %>%
+      dplyr::mutate(
+        literature_accession_detail = paste0(region.standard, ":", Accession)
+      ) %>%
+      dplyr::group_by(strain.standard.type) %>%
+      dplyr::summarise(
+        literature_accessions_available = paste(
+          unique(literature_accession_detail),
+          collapse = "; "
+        ),
+        literature_sources_available = if ("literature_source" %in% names(.)) {
+          paste(unique(na.omit(literature_source)), collapse = "; ")
+        } else {
+          NA_character_
+        },
+        .groups = "drop"
+      )
+    
+    select_region_attendance <- select_region_attendance %>%
+      dplyr::left_join(lit_summary, by = "strain.standard.type")
+  }
+  
+  select_region_attendance_filtered <- select_region_attendance %>%
+    dplyr::mutate(
+      total = rowSums(
+        !is.na(dplyr::select(., tidyselect::any_of(regions_to_include))) &
+          dplyr::select(., tidyselect::any_of(regions_to_include)) != ""
+      )
+    ) %>%
+    dplyr::filter(total >= min_region_requirement) %>%
+    dplyr::select(-total)
+  
+  output_wide <- file.path(
+    phylo_dir,
+    paste0("Region_attendance_sheet_", project_name, ".", region_set_name, ".csv")
+  )
+  
+  write.csv(select_region_attendance_filtered, output_wide, row.names = FALSE)
+  
+  policy_path <- file.path(
+    phylo_dir,
+    paste0("region_selection_policy_", project_name, ".", region_set_name, ".txt")
+  )
+  
+  writeLines(
+    c(
+      paste0("project_name: ", project_name),
+      paste0("region_set_name: ", region_set_name),
+      paste0("regions_to_include: ", paste(regions_to_include, collapse = ", ")),
+      paste0("min_region_requirement: ", min_region_requirement),
+      paste0("allow_compound_regions_for: ", paste(allow_compound_regions_for, collapse = ", ")),
+      paste0("prefer_literature_accessions: ", prefer_literature_accessions),
+      "",
+      "Rule:",
+      "Regions listed in allow_compound_regions_for can be selected from compound region.standard values such as ITS;LSU;SSU.",
+      "All other regions require exact region.standard matches.",
+      "",
+      "Literature accession rule:",
+      "If prefer_literature_accessions = TRUE and a literature_accession column exists, literature accessions are prioritized when choosing one accession per strain/region.",
+      "The attendance sheet includes literature_accessions_available and literature_sources_available columns when literature accession flags are present."
+    ),
+    con = policy_path
+  )
+  
+  message("Filtered metadata written to: ", output_long)
+  message("Region attendance sheet written to: ", output_wide)
+  message("Region selection policy written to: ", policy_path)
+  message("Region set: ", region_set_name)
+  message("Regions included: ", paste(regions_to_include, collapse = ", "))
+  message("Minimum region requirement: ", min_region_requirement)
+  message("Compound regions allowed for: ", paste(allow_compound_regions_for, collapse = ", "))
+  message("Prefer literature accessions: ", prefer_literature_accessions)
+}
+
+
+# optional filtering of strains in attendance sheet
+filter_strains_for_tree <- function(project_name,
+                                    attendance_file = NULL,
+                                    metadata_file = NULL,
+                                    output_file = NULL,
+                                    strain_col = "strain.standard.type",
+                                    include_col = "include_in_tree") {
+  
+  if (is.null(attendance_file)) {
+    attendance_file <- file.path(
+      "metadata_files",
+      paste0("strain_attendance_sheet_", project_name, ".csv")
+    )
+  }
+  
+  if (is.null(metadata_file)) {
+    metadata_file <- file.path(
+      "metadata_files",
+      paste0("all_accessions_pulled_metadata_", project_name, "_curated.csv")
+    )
+  }
+  
+  if (is.null(output_file)) {
+    output_file <- file.path(
+      "metadata_files",
+      paste0("all_accessions_pulled_metadata_", project_name, "_curated_treefiltered.csv")
+    )
+  }
+  
+  attendance <- read.csv(attendance_file, stringsAsFactors = FALSE, check.names = FALSE)
+  metadata <- read.csv(metadata_file, stringsAsFactors = FALSE, check.names = FALSE)
+  
+  if (!include_col %in% names(attendance)) {
+    stop(
+      "The attendance sheet does not contain column: ", include_col, "\n",
+      "Add this column and mark strains to keep with TRUE, yes, keep, or 1."
+    )
+  }
+  
+  if (!strain_col %in% names(attendance)) {
+    stop("Attendance sheet does not contain strain column: ", strain_col)
+  }
+  
+  if (!strain_col %in% names(metadata)) {
+    stop("Metadata file does not contain strain column: ", strain_col)
+  }
+  
+  keep_values <- c("TRUE", "true", "T", "t", "yes", "YES", "Yes",
+                   "keep", "KEEP", "Keep", "1")
+  
+  strains_to_keep <- attendance[[strain_col]][
+    as.character(attendance[[include_col]]) %in% keep_values
+  ]
+  
+  filtered_metadata <- metadata[metadata[[strain_col]] %in% strains_to_keep, ]
+  
+  write.csv(filtered_metadata, output_file, row.names = FALSE)
+  
+  message("Original metadata rows: ", nrow(metadata))
+  message("Filtered metadata rows: ", nrow(filtered_metadata))
+  message("Strains retained: ", length(unique(filtered_metadata[[strain_col]])))
+  message("Filtered metadata written to: ", output_file)
+  
+  return(filtered_metadata)
+}
+
+
+# making subfolders for unique analyses within a single region set. For easier comparisons
+start_phylogeny_run <- function(project_name,
+                                regions_to_include,
+                                run_label = NULL) {
+  if (!exists("base_dir", envir = .GlobalEnv)) {
+    stop("`base_dir` is not defined. Run start_project() first.")
+  }
+  
+  regions_to_include <- sort_regions(regions_to_include)
+  region_set_name <- paste(regions_to_include, collapse = ".")
+  
+  region_root_dir <- file.path(base_dir, "phylogenies", region_set_name)
+  runs_dir <- file.path(region_root_dir, "runs")
+  
+  if (!dir.exists(region_root_dir)) {
+    stop("Region-set folder not found: ", region_root_dir,
+         "\nDid you run select_regions() first?")
+  }
+  
+  if (!dir.exists(runs_dir)) dir.create(runs_dir, recursive = TRUE)
+  
+  existing_runs <- list.dirs(runs_dir, recursive = FALSE, full.names = FALSE)
+  existing_nums <- suppressWarnings(as.integer(sub("^run_([0-9]+).*", "\\1", existing_runs)))
+  existing_nums <- existing_nums[!is.na(existing_nums)]
+  
+  next_num <- if (length(existing_nums) == 0) 1 else max(existing_nums) + 1
+  run_name <- sprintf("run_%03d", next_num)
+  
+  if (!is.null(run_label) && nzchar(run_label)) {
+    clean_label <- gsub("[^A-Za-z0-9_-]+", "_", run_label)
+    run_name <- paste0(run_name, "_", clean_label)
+  }
+  
+  run_dir <- file.path(runs_dir, run_name)
+  
+  dir.create(file.path(run_dir, "prep"), recursive = TRUE)
+  dir.create(file.path(run_dir, "single_gene_trees"), recursive = TRUE)
+  dir.create(file.path(run_dir, "multi_gene_trees"), recursive = TRUE)
+  dir.create(file.path(run_dir, "logs"), recursive = TRUE)
+  
+  message("Created phylogeny run folder: ", run_dir)
+  return(run_dir)
+}
+
+
+get_phylo_paths <- function(project_name,
+                            regions_to_include,
+                            run_dir = NULL) {
+  if (!exists("base_dir", envir = .GlobalEnv)) {
+    stop("`base_dir` is not defined. Run start_project() first.")
+  }
+  
+  regions_to_include <- sort_regions(regions_to_include)
+  region_set_name <- paste(regions_to_include, collapse = ".")
+  
+  region_root_dir <- file.path(base_dir, "phylogenies", region_set_name)
+  
+  if (is.null(run_dir)) {
+    analysis_dir <- region_root_dir
+  } else {
+    analysis_dir <- normalizePath(run_dir, mustWork = FALSE)
+  }
+  
+  list(
+    region_set_name = region_set_name,
+    region_root_dir = region_root_dir,
+    analysis_dir = analysis_dir,
+    prep_dir = file.path(analysis_dir, "prep"),
+    single_gene_dir = file.path(analysis_dir, "single_gene_trees"),
+    multi_gene_dir = file.path(analysis_dir, "multi_gene_trees")
+  )
+}
+
+
+
+# creating multifastas
+create_multifastas <- function(project_name,
+                               regions_to_include,
+                               run_dir = NULL,
+                               use_tree_filter = TRUE,
+                               include_col = "include_in_tree",
+                               strain_col = "strain.standard.type") {
+  
+  if (!exists("base_dir", envir = .GlobalEnv)) {
+    stop("`base_dir` is not defined. Run start_project() first.")
+  }
+  
+  paths <- get_phylo_paths(
+    project_name = project_name,
+    regions_to_include = regions_to_include,
+    run_dir = run_dir
+  )
+  
+  region_set_name <- paths$region_set_name
+  
+  # Shared dataset folder from select_regions()
+  region_root_dir <- paths$region_root_dir
+  
+  # THIS run's output folder
+  analysis_dir <- paths$analysis_dir
+  prep_dir <- paths$prep_dir
+  
+  if (!dir.exists(region_root_dir)) {
+    stop("Expected region-set folder not found: ", region_root_dir,
+         "\nDid you run select_regions() for this region set?")
+  }
   
   if (!dir.exists(prep_dir)) {
-    stop("Prep directory not found: ", prep_dir,
-         "\nDid you run trim_regions_trimal() for this region set?")
+    dir.create(prep_dir, recursive = TRUE)
   }
-  if (!dir.exists(multi_gene_dir)) dir.create(multi_gene_dir, recursive = TRUE)
   
-  # 1) Read model_fits TSV (from previous step)
+  # One subfolder per region
+  for (rg in regions_to_include) {
+    rg_dir <- file.path(prep_dir, rg)
+    if (!dir.exists(rg_dir)) dir.create(rg_dir, recursive = TRUE)
+  }
+  
+  # ------------------------------------------------------------------
+  # READ SHARED INPUT FILES FROM REGION ROOT
+  # ------------------------------------------------------------------
+  
+  attendance_path <- file.path(
+    region_root_dir,
+    paste0(
+      "Region_attendance_sheet_",
+      project_name,
+      ".",
+      region_set_name,
+      ".csv"
+    )
+  )
+  
+  long_filtered_path <- file.path(
+    region_root_dir,
+    paste0(
+      "selected_accessions_metadata_",
+      project_name,
+      ".",
+      region_set_name,
+      ".csv"
+    )
+  )
+  
+  if (!file.exists(attendance_path)) {
+    stop("Region attendance sheet not found: ", attendance_path)
+  }
+  
+  if (!file.exists(long_filtered_path)) {
+    stop("Filtered metadata (long) not found: ", long_filtered_path)
+  }
+  
+  region_attendance <- read.csv(
+    attendance_path,
+    header = TRUE,
+    stringsAsFactors = FALSE,
+    check.names = FALSE
+  )
+  
+  filtered_long <- read.csv(
+    long_filtered_path,
+    header = TRUE,
+    stringsAsFactors = FALSE,
+    check.names = FALSE
+  )
+  
+  # ------------------------------------------------------------------
+  # OPTIONAL TREE FILTERING
+  # ------------------------------------------------------------------
+  
+  if (isTRUE(use_tree_filter)) {
+    
+    if (include_col %in% colnames(region_attendance)) {
+      
+      if (!strain_col %in% colnames(region_attendance)) {
+        stop(
+          "Tree filter column found, but strain column is missing from attendance sheet: ",
+          strain_col
+        )
+      }
+      
+      if (!strain_col %in% colnames(filtered_long)) {
+        stop(
+          "Tree filter column found, but strain column is missing from selected metadata: ",
+          strain_col
+        )
+      }
+      
+      keep_values <- c(
+        "TRUE", "true", "True",
+        "T", "t",
+        "yes", "YES", "Yes",
+        "keep", "KEEP", "Keep",
+        "1"
+      )
+      
+      keep_rows <- as.character(region_attendance[[include_col]]) %in% keep_values
+      
+      strains_to_keep <- unique(region_attendance[[strain_col]][keep_rows])
+      
+      strains_to_keep <- strains_to_keep[
+        !is.na(strains_to_keep) &
+          strains_to_keep != ""
+      ]
+      
+      message("Tree filter detected: ", include_col)
+      message("Strains marked for inclusion: ", length(strains_to_keep))
+      
+      original_attendance_n <- nrow(region_attendance)
+      original_long_n <- nrow(filtered_long)
+      
+      region_attendance <- region_attendance[
+        region_attendance[[strain_col]] %in% strains_to_keep,
+        ,
+        drop = FALSE
+      ]
+      
+      filtered_long <- filtered_long[
+        filtered_long[[strain_col]] %in% strains_to_keep,
+        ,
+        drop = FALSE
+      ]
+      
+      message(
+        "Attendance rows retained: ",
+        nrow(region_attendance),
+        " / ",
+        original_attendance_n
+      )
+      
+      message(
+        "Metadata rows retained: ",
+        nrow(filtered_long),
+        " / ",
+        original_long_n
+      )
+      
+      # Write filtered copies INSIDE RUN FOLDER
+      filtered_attendance_path <- file.path(
+        analysis_dir,
+        paste0(
+          "Region_attendance_sheet_",
+          project_name,
+          ".",
+          region_set_name,
+          "_treefiltered.csv"
+        )
+      )
+      
+      filtered_long_path <- file.path(
+        analysis_dir,
+        paste0(
+          "selected_accessions_metadata_",
+          project_name,
+          ".",
+          region_set_name,
+          "_treefiltered.csv"
+        )
+      )
+      
+      write.csv(region_attendance, filtered_attendance_path, row.names = FALSE)
+      write.csv(filtered_long, filtered_long_path, row.names = FALSE)
+      
+      message("Wrote tree-filtered attendance sheet: ", filtered_attendance_path)
+      message("Wrote tree-filtered selected metadata: ", filtered_long_path)
+      
+    } else {
+      
+      stop(
+        "Tree filtering requested, but no column named '",
+        include_col,
+        "' was found in:\n",
+        attendance_path,
+        "\n\nAdd an include_in_tree column to this exact file, then rerun create_multifastas()."
+      )
+    }
+  }
+  
+  # ------------------------------------------------------------------
+  # SANITY CHECKS
+  # ------------------------------------------------------------------
+  
+  needed_cols <- c(
+    "Accession",
+    "region.standard",
+    "fasta.header.type",
+    "sequence"
+  )
+  
+  missing_cols <- setdiff(needed_cols, colnames(filtered_long))
+  
+  if (length(missing_cols) > 0) {
+    stop(
+      "Missing columns in filtered metadata: ",
+      paste(missing_cols, collapse = ", "),
+      "\nUpstream curation must provide these."
+    )
+  }
+  
+  # ------------------------------------------------------------------
+  # BUILD ACCESSION VECTORS
+  # ------------------------------------------------------------------
+  
+  region_cols <- intersect(
+    regions_to_include,
+    colnames(region_attendance)
+  )
+  
+  if (length(region_cols) == 0) {
+    stop(
+      "None of the requested regions are present as columns in the attendance sheet."
+    )
+  }
+  
+  region_accessions <- lapply(region_cols, function(rg) {
+    unique(na.omit(region_attendance[[rg]]))
+  })
+  
+  names(region_accessions) <- region_cols
+  
+  # ------------------------------------------------------------------
+  # WRITE RAW FASTAS
+  # ------------------------------------------------------------------
+  
+  manifest <- data.frame(
+    region = character(0),
+    n_sequences = integer(0),
+    fasta_path = character(0),
+    stringsAsFactors = FALSE
+  )
+  
+  for (rg in names(region_accessions)) {
+    
+    acc_vec <- region_accessions[[rg]]
+    
+    if (length(acc_vec) == 0) {
+      message("No accessions found for region: ", rg, " (skipping).")
+      next
+    }
+    
+    sub_df <- filtered_long[
+      filtered_long$Accession %in% acc_vec &
+        filtered_long$region.standard == rg,
+    ]
+    
+    sub_df <- sub_df[
+      !is.na(sub_df$sequence) &
+        sub_df$sequence != "",
+    ]
+    
+    sub_df <- sub_df[
+      order(sub_df$fasta.header.type, decreasing = FALSE),
+    ]
+    
+    headers <- sub_df$fasta.header.type
+    
+    needs_gt <- !startsWith(headers, ">")
+    headers[needs_gt] <- paste0(">", headers[needs_gt])
+    
+    seqs_fasta <- c(rbind(headers, sub_df$sequence))
+    
+    rg_dir <- file.path(prep_dir, rg)
+    
+    fasta_name <- paste0(
+      project_name,
+      ".",
+      region_set_name,
+      "_",
+      rg,
+      ".raw.fasta"
+    )
+    
+    fasta_path <- file.path(rg_dir, fasta_name)
+    
+    writeLines(seqs_fasta, con = fasta_path)
+    
+    message("Created multifasta for region ", rg, ": ", fasta_path)
+    
+    manifest <- rbind(
+      manifest,
+      data.frame(
+        region = rg,
+        n_sequences = nrow(sub_df),
+        fasta_path = fasta_path,
+        stringsAsFactors = FALSE
+      )
+    )
+  }
+  
+  # ------------------------------------------------------------------
+  # MANIFEST
+  # ------------------------------------------------------------------
+  
+  manifest_path <- file.path(
+    prep_dir,
+    paste0(
+      "multifasta_manifest_",
+      project_name,
+      ".",
+      region_set_name,
+      ".tsv"
+    )
+  )
+  
+  write.table(
+    manifest,
+    manifest_path,
+    sep = "\t",
+    quote = FALSE,
+    row.names = FALSE
+  )
+  
+  message("Wrote manifest: ", manifest_path)
+  
+  invisible(manifest)
+}
+
+
+
+
+align_regions_mafft <- function(project_name,
+                                regions_to_include,
+                                run_dir = NULL,
+                                threads = max(1, parallel::detectCores() - 1),
+                                mafft_args = c("--auto", "--reorder"),
+                                force = FALSE) {
+  
+  if (!exists("base_dir", envir = .GlobalEnv)) {
+    stop("`base_dir` is not defined. Run start_project() first.")
+  }
+  
+  paths <- get_phylo_paths(
+    project_name = project_name,
+    regions_to_include = regions_to_include,
+    run_dir = run_dir
+  )
+  
+  regions_to_include <- sort_regions(regions_to_include)
+  region_set_name <- paths$region_set_name
+  prep_dir <- paths$prep_dir
+  
+  mafft_path <- Sys.getenv("MAFFT_PATH", unset = "mafft")
+  
+  check_result <- suppressWarnings(
+    system2(mafft_path, "--version", stdout = TRUE, stderr = TRUE)
+  )
+  
+  if (
+    length(check_result) == 0 ||
+    grepl("not found|No such file", check_result[1], ignore.case = TRUE)
+  ) {
+    stop(
+      "MAFFT not found. Please install it or set MAFFT_PATH in your .Renviron file.\n",
+      "Example:  MAFFT_PATH=/usr/local/bin/mafft\n",
+      "Then restart R and rerun this command."
+    )
+  } else {
+    message("Using MAFFT executable: ", mafft_path)
+  }
+  
+  if (!dir.exists(prep_dir)) {
+    stop(
+      "Prep directory not found: ",
+      prep_dir,
+      "\nDid you run create_multifastas() for this run?"
+    )
+  }
+  
+  manifest <- data.frame(
+    region = character(0),
+    raw_fasta = character(0),
+    aligned_fasta = character(0),
+    log_path = character(0),
+    status = character(0),
+    stringsAsFactors = FALSE
+  )
+  
+  for (rg in regions_to_include) {
+    
+    rg_dir <- file.path(prep_dir, rg)
+    
+    if (!dir.exists(rg_dir)) {
+      warning("Region prep folder missing (skipping): ", rg_dir)
+      next
+    }
+    
+    raw_fa <- file.path(
+      rg_dir,
+      paste0(project_name, ".", region_set_name, "_", rg, ".raw.fasta")
+    )
+    
+    aln_fa <- file.path(
+      rg_dir,
+      paste0(project_name, ".", region_set_name, "_", rg, ".aligned.fasta")
+    )
+    
+    log_fp <- file.path(
+      rg_dir,
+      paste0(project_name, ".", region_set_name, "_", rg, ".mafft.log")
+    )
+    
+    if (!file.exists(raw_fa)) {
+      warning("Raw FASTA not found for region ", rg, ": ", raw_fa)
+      
+      manifest <- rbind(
+        manifest,
+        data.frame(
+          region = rg,
+          raw_fasta = raw_fa,
+          aligned_fasta = NA,
+          log_path = log_fp,
+          status = "missing_raw",
+          stringsAsFactors = FALSE
+        )
+      )
+      
+      next
+    }
+    
+    if (file.exists(aln_fa) && !force) {
+      message("Aligned FASTA already exists; use force=TRUE to overwrite: ", aln_fa)
+      
+      manifest <- rbind(
+        manifest,
+        data.frame(
+          region = rg,
+          raw_fasta = raw_fa,
+          aligned_fasta = aln_fa,
+          log_path = log_fp,
+          status = "skipped_exists",
+          stringsAsFactors = FALSE
+        )
+      )
+      
+      next
+    }
+    
+    message("Running MAFFT for region ", rg, " ...")
+    
+    mafft_args_full <- c(
+      "--thread",
+      as.character(threads),
+      mafft_args,
+      raw_fa
+    )
+    
+    exit_code <- tryCatch(
+      {
+        system2(
+          command = mafft_path,
+          args = mafft_args_full,
+          stdout = aln_fa,
+          stderr = log_fp
+        )
+      },
+      error = function(e) {
+        warning("MAFFT invocation failed for ", rg, ": ", conditionMessage(e))
+        return(1L)
+      }
+    )
+    
+    status <- if (
+      !is.null(exit_code) &&
+      exit_code == 0L &&
+      file.exists(aln_fa)
+    ) {
+      "ok"
+    } else {
+      "failed"
+    }
+    
+    manifest <- rbind(
+      manifest,
+      data.frame(
+        region = rg,
+        raw_fasta = raw_fa,
+        aligned_fasta = if (file.exists(aln_fa)) aln_fa else NA,
+        log_path = log_fp,
+        status = status,
+        stringsAsFactors = FALSE
+      )
+    )
+    
+    if (status != "ok") {
+      warning("MAFFT failed for region ", rg, ". See log: ", log_fp)
+    } else {
+      message("Aligned FASTA written: ", aln_fa)
+    }
+  }
+  
+  align_manifest <- file.path(
+    prep_dir,
+    paste0("alignment_manifest_", project_name, ".", region_set_name, ".tsv")
+  )
+  
+  write.table(
+    manifest,
+    align_manifest,
+    sep = "\t",
+    quote = FALSE,
+    row.names = FALSE
+  )
+  
+  message("Alignment manifest: ", align_manifest)
+  
+  invisible(manifest)
+}
+
+
+
+trim_regions_trimal <- function(project_name,
+                                regions_to_include,
+                                run_dir = NULL,
+                                trimal_args = c("-automated1"),
+                                force = FALSE) {
+  
+  if (!exists("base_dir", envir = .GlobalEnv)) {
+    stop("`base_dir` is not defined. Run start_project() first.")
+  }
+  
+  paths <- get_phylo_paths(
+    project_name = project_name,
+    regions_to_include = regions_to_include,
+    run_dir = run_dir
+  )
+  
+  regions_to_include <- sort_regions(regions_to_include)
+  region_set_name <- paths$region_set_name
+  prep_dir <- paths$prep_dir
+  
+  trimal_path <- Sys.getenv("TRIMAL_PATH", unset = "trimal")
+  
+  check_result <- suppressWarnings(
+    system2(trimal_path, "--version", stdout = TRUE, stderr = TRUE)
+  )
+  
+  if (
+    length(check_result) == 0 ||
+    grepl("not found|No such file", check_result[1], ignore.case = TRUE)
+  ) {
+    stop(
+      "trimAl not found. Please install it or set TRIMAL_PATH in your .Renviron file.\n",
+      "Example:  TRIMAL_PATH=/usr/local/bin/trimal\n",
+      "Then restart R and rerun this command."
+    )
+  } else {
+    message("Using trimAl executable: ", trimal_path)
+  }
+  
+  if (!dir.exists(prep_dir)) {
+    stop(
+      "Prep directory not found: ",
+      prep_dir,
+      "\nDid you run align_regions_mafft() for this run?"
+    )
+  }
+  
+  manifest <- data.frame(
+    region = character(0),
+    aligned_fasta = character(0),
+    trimmed_fasta = character(0),
+    log_path = character(0),
+    status = character(0),
+    stringsAsFactors = FALSE
+  )
+  
+  for (rg in regions_to_include) {
+    
+    rg_dir <- file.path(prep_dir, rg)
+    
+    aln_fa <- file.path(
+      rg_dir,
+      paste0(project_name, ".", region_set_name, "_", rg, ".aligned.fasta")
+    )
+    
+    trimmed_fa <- file.path(
+      rg_dir,
+      paste0(project_name, ".", region_set_name, "_", rg, ".trimmed.fasta")
+    )
+    
+    log_fp <- file.path(
+      rg_dir,
+      paste0(project_name, ".", region_set_name, "_", rg, ".trimal.log")
+    )
+    
+    if (!file.exists(aln_fa)) {
+      warning("Aligned FASTA not found for region ", rg, ": ", aln_fa)
+      
+      manifest <- rbind(
+        manifest,
+        data.frame(
+          region = rg,
+          aligned_fasta = aln_fa,
+          trimmed_fasta = NA,
+          log_path = log_fp,
+          status = "missing_aligned",
+          stringsAsFactors = FALSE
+        )
+      )
+      
+      next
+    }
+    
+    if (file.exists(trimmed_fa) && !force) {
+      message("Trimmed FASTA already exists; use force=TRUE to overwrite: ", trimmed_fa)
+      
+      manifest <- rbind(
+        manifest,
+        data.frame(
+          region = rg,
+          aligned_fasta = aln_fa,
+          trimmed_fasta = trimmed_fa,
+          log_path = log_fp,
+          status = "skipped_exists",
+          stringsAsFactors = FALSE
+        )
+      )
+      
+      next
+    }
+    
+    message("Running trimAl for region ", rg, " ...")
+    
+    trimal_args_full <- c(
+      trimal_args,
+      "-in",
+      aln_fa,
+      "-out",
+      trimmed_fa
+    )
+    
+    exit_code <- tryCatch(
+      {
+        system2(
+          command = trimal_path,
+          args = trimal_args_full,
+          stdout = log_fp,
+          stderr = log_fp
+        )
+      },
+      error = function(e) {
+        warning("trimAl invocation failed for ", rg, ": ", conditionMessage(e))
+        return(1L)
+      }
+    )
+    
+    status <- if (
+      !is.null(exit_code) &&
+      exit_code == 0L &&
+      file.exists(trimmed_fa)
+    ) {
+      "ok"
+    } else {
+      "failed"
+    }
+    
+    manifest <- rbind(
+      manifest,
+      data.frame(
+        region = rg,
+        aligned_fasta = aln_fa,
+        trimmed_fasta = if (file.exists(trimmed_fa)) trimmed_fa else NA,
+        log_path = log_fp,
+        status = status,
+        stringsAsFactors = FALSE
+      )
+    )
+    
+    if (status != "ok") {
+      warning("trimAl failed for region ", rg, ". See log: ", log_fp)
+    } else {
+      message("Trimmed FASTA written: ", trimmed_fa)
+    }
+  }
+  
+  trim_manifest <- file.path(
+    prep_dir,
+    paste0("trim_manifest_", project_name, ".", region_set_name, ".tsv")
+  )
+  
+  write.table(
+    manifest,
+    trim_manifest,
+    sep = "\t",
+    quote = FALSE,
+    row.names = FALSE
+  )
+  
+  message("Trim manifest: ", trim_manifest)
+  
+  invisible(manifest)
+}
+
+
+# write FINAL attendance sheet - only includes accessions that made it past the trimming process
+# (some accessions/sequences may be removed automatically by trimal, if certain parameters are used)
+write_final_region_attendance_sheet <- function(project_name,
+                                                regions_to_include,
+                                                run_dir = NULL,
+                                                strain_col = "strain.standard.type") {
+  
+  if (!exists("base_dir", envir = .GlobalEnv)) {
+    stop("`base_dir` is not defined. Run start_project() first.")
+  }
+  
+  if (is.null(run_dir)) {
+    stop("write_final_region_attendance_sheet() requires a run_dir.")
+  }
+  
+  paths <- get_phylo_paths(
+    project_name = project_name,
+    regions_to_include = regions_to_include,
+    run_dir = run_dir
+  )
+  
+  regions_to_include <- sort_regions(regions_to_include)
+  region_set_name <- paths$region_set_name
+  region_root_dir <- paths$region_root_dir
+  analysis_dir <- paths$analysis_dir
+  prep_dir <- paths$prep_dir
+  
+  if (!dir.exists(prep_dir)) {
+    stop("Prep directory not found: ", prep_dir)
+  }
+  
+  intended_attendance_path <- file.path(
+    analysis_dir,
+    paste0(
+      "Region_attendance_sheet_",
+      project_name,
+      ".",
+      region_set_name,
+      "_treefiltered.csv"
+    )
+  )
+  
+  if (!file.exists(intended_attendance_path)) {
+    intended_attendance_path <- file.path(
+      region_root_dir,
+      paste0(
+        "Region_attendance_sheet_",
+        project_name,
+        ".",
+        region_set_name,
+        ".csv"
+      )
+    )
+  }
+  
+  if (!file.exists(intended_attendance_path)) {
+    stop("Could not find intended/input attendance sheet.")
+  }
+  
+  metadata_path <- file.path(
+    analysis_dir,
+    paste0(
+      "selected_accessions_metadata_",
+      project_name,
+      ".",
+      region_set_name,
+      "_treefiltered.csv"
+    )
+  )
+  
+  if (!file.exists(metadata_path)) {
+    metadata_path <- file.path(
+      region_root_dir,
+      paste0(
+        "selected_accessions_metadata_",
+        project_name,
+        ".",
+        region_set_name,
+        ".csv"
+      )
+    )
+  }
+  
+  if (!file.exists(metadata_path)) {
+    stop("Could not find selected accessions metadata.")
+  }
+  
+  intended_attendance <- read.csv(
+    intended_attendance_path,
+    header = TRUE,
+    stringsAsFactors = FALSE,
+    check.names = FALSE
+  )
+  
+  selected_metadata <- read.csv(
+    metadata_path,
+    header = TRUE,
+    stringsAsFactors = FALSE,
+    check.names = FALSE
+  )
+  
+  required_meta_cols <- c("Accession", "region.standard", "fasta.header.type")
+  missing_meta_cols <- setdiff(required_meta_cols, names(selected_metadata))
+  
+  if (length(missing_meta_cols) > 0) {
+    stop(
+      "Selected metadata is missing required columns: ",
+      paste(missing_meta_cols, collapse = ", ")
+    )
+  }
+  
+  if (!strain_col %in% names(intended_attendance)) {
+    stop("Strain column not found in attendance sheet: ", strain_col)
+  }
+  
+  final_attendance <- intended_attendance
+  
+  retention_report <- data.frame(
+    region = character(0),
+    accession = character(0),
+    strain = character(0),
+    fasta_header = character(0),
+    status = character(0),
+    stringsAsFactors = FALSE
+  )
+  
+  selected_metadata$fasta.header.type <- sub(
+    "^>",
+    "",
+    selected_metadata$fasta.header.type
+  )
+  
+  for (rg in regions_to_include) {
+    
+    if (!rg %in% names(final_attendance)) {
+      warning("Region column not found in attendance sheet: ", rg)
+      next
+    }
+    
+    rg_dir <- file.path(prep_dir, rg)
+    
+    aligned_fa <- file.path(
+      rg_dir,
+      paste0(project_name, ".", region_set_name, "_", rg, ".aligned.fasta")
+    )
+    
+    trimmed_fa <- file.path(
+      rg_dir,
+      paste0(project_name, ".", region_set_name, "_", rg, ".trimmed.fasta")
+    )
+    
+    if (!file.exists(aligned_fa)) {
+      warning("Aligned FASTA not found for region ", rg, ": ", aligned_fa)
+      next
+    }
+    
+    if (!file.exists(trimmed_fa)) {
+      warning("Trimmed FASTA not found for region ", rg, ": ", trimmed_fa)
+      next
+    }
+    
+    aligned_names <- names(Biostrings::readDNAStringSet(aligned_fa))
+    trimmed_names <- names(Biostrings::readDNAStringSet(trimmed_fa))
+    
+    region_metadata <- selected_metadata[
+      selected_metadata$region.standard == rg,
+      ,
+      drop = FALSE
+    ]
+    
+    header_lookup <- region_metadata[, c("Accession", "fasta.header.type")]
+    
+    intended_acc <- final_attendance[[rg]]
+    intended_acc_clean <- intended_acc[
+      !is.na(intended_acc) &
+        intended_acc != ""
+    ]
+    
+    retained_acc <- character(0)
+    
+    for (acc in intended_acc_clean) {
+      
+      possible_headers <- header_lookup$fasta.header.type[
+        header_lookup$Accession == acc
+      ]
+      
+      possible_headers <- possible_headers[
+        !is.na(possible_headers) &
+          possible_headers != ""
+      ]
+      
+      in_aligned <- any(possible_headers %in% aligned_names)
+      in_trimmed <- any(possible_headers %in% trimmed_names)
+      
+      if (in_trimmed) {
+        retained_acc <- c(retained_acc, acc)
+      }
+      
+      strain_value <- final_attendance[[strain_col]][
+        which(final_attendance[[rg]] == acc)[1]
+      ]
+      
+      status <- if (in_trimmed) {
+        "retained"
+      } else if (in_aligned) {
+        "removed_by_trimal"
+      } else if (length(possible_headers) == 0) {
+        "no_header_found_in_metadata"
+      } else {
+        "not_found_in_aligned_fasta"
+      }
+      
+      retention_report <- rbind(
+        retention_report,
+        data.frame(
+          region = rg,
+          accession = acc,
+          strain = strain_value,
+          fasta_header = paste(possible_headers, collapse = ";"),
+          status = status,
+          stringsAsFactors = FALSE
+        )
+      )
+    }
+    
+    removed_acc <- setdiff(intended_acc_clean, retained_acc)
+    
+    final_attendance[[rg]][
+      final_attendance[[rg]] %in% removed_acc
+    ] <- NA
+  }
+  
+  region_cols <- intersect(regions_to_include, names(final_attendance))
+  
+  keep_rows <- rowSums(
+    !is.na(final_attendance[, region_cols, drop = FALSE]) &
+      final_attendance[, region_cols, drop = FALSE] != ""
+  ) > 0
+  
+  final_attendance <- final_attendance[keep_rows, , drop = FALSE]
+  
+  intended_copy_path <- file.path(
+    analysis_dir,
+    paste0(
+      "intended_region_attendance_sheet_",
+      project_name,
+      ".",
+      region_set_name,
+      ".csv"
+    )
+  )
+  
+  final_attendance_path <- file.path(
+    analysis_dir,
+    paste0(
+      "Region_attendance_sheet_",
+      project_name,
+      ".",
+      region_set_name,
+      ".csv"
+    )
+  )
+  
+  retention_report_path <- file.path(
+    analysis_dir,
+    paste0(
+      "trim_retention_report_",
+      project_name,
+      ".",
+      region_set_name,
+      ".tsv"
+    )
+  )
+  
+  write.csv(
+    intended_attendance,
+    intended_copy_path,
+    row.names = FALSE
+  )
+  
+  write.csv(
+    final_attendance,
+    final_attendance_path,
+    row.names = FALSE
+  )
+  
+  write.table(
+    retention_report,
+    retention_report_path,
+    sep = "\t",
+    quote = FALSE,
+    row.names = FALSE
+  )
+  
+  message("Wrote intended attendance sheet: ", intended_copy_path)
+  message("Wrote final region attendance sheet: ", final_attendance_path)
+  message("Wrote trim retention report: ", retention_report_path)
+  
+  invisible(
+    list(
+      intended_attendance = intended_attendance,
+      final_attendance = final_attendance,
+      retention_report = retention_report,
+      intended_attendance_path = intended_copy_path,
+      final_attendance_path = final_attendance_path,
+      retention_report_path = retention_report_path
+    )
+  )
+}
+
+
+
+# running IQTREE modelfinder step for single region 
+iqtree_modelfinder_per_region <- function(project_name,
+                                          regions_to_include,
+                                          run_dir = NULL,
+                                          threads = max(1, parallel::detectCores() - 1),
+                                          iqtree_args = c("-m", "MFP+MERGE", "-nt", "AUTO", "-quiet"),
+                                          single_gene_bootstraps = 1000,
+                                          force = FALSE) {
+  
+  if (!exists("base_dir", envir = .GlobalEnv)) {
+    stop("`base_dir` is not defined. Run start_project() first.")
+  }
+  
+  iqtree_bin <- Sys.getenv("IQTREE_PATH")
+  
+  if (!nzchar(iqtree_bin)) {
+    stop("IQTREE_PATH is not set in .Renviron.")
+  }
+  
+  suppressWarnings(system2(iqtree_bin, "-version"))
+  
+  paths <- get_phylo_paths(
+    project_name = project_name,
+    regions_to_include = regions_to_include,
+    run_dir = run_dir
+  )
+  
+  regions_to_include <- sort_regions(regions_to_include)
+  region_set_name <- paths$region_set_name
+  prep_dir <- paths$prep_dir
+  single_gene_dir <- paths$single_gene_dir
+  multi_gene_dir <- paths$multi_gene_dir
+  
+  if (!dir.exists(prep_dir)) {
+    stop(
+      "Prep directory not found: ",
+      prep_dir,
+      "\nDid you run trim_regions_trimal() for this run?"
+    )
+  }
+  
+  if (!dir.exists(single_gene_dir)) {
+    dir.create(single_gene_dir, recursive = TRUE)
+  }
+  
+  if (!dir.exists(multi_gene_dir)) {
+    dir.create(multi_gene_dir, recursive = TRUE)
+  }
+  
+  results <- list()
+  
+  for (rg in regions_to_include) {
+    
+    rg_prep_dir <- file.path(prep_dir, rg)
+    
+    trimmed_fa <- file.path(
+      rg_prep_dir,
+      paste0(project_name, ".", region_set_name, "_", rg, ".trimmed.fasta")
+    )
+    
+    if (!file.exists(trimmed_fa)) {
+      warning("Missing trimmed alignment for region ", rg, ": ", trimmed_fa)
+      next
+    }
+    
+    rg_sg_dir <- file.path(single_gene_dir, rg)
+    
+    if (!dir.exists(rg_sg_dir)) {
+      dir.create(rg_sg_dir, recursive = TRUE)
+    }
+    
+    prefix_base <- paste0(
+      project_name,
+      ".",
+      region_set_name,
+      "_",
+      rg,
+      ".modeltest"
+    )
+    
+    prefix <- file.path(rg_sg_dir, prefix_base)
+    iqtreefile <- paste0(prefix, ".iqtree")
+    
+    if (!file.exists(iqtreefile) || force) {
+      
+      args <- c(
+        "-s",
+        trimmed_fa,
+        "-pre",
+        prefix,
+        "-bb",
+        as.character(single_gene_bootstraps)
+      )
+      
+      if (!any(iqtree_args == "-nt")) {
+        args <- c(args, "-nt", as.character(threads))
+      }
+      
+      args <- c(args, iqtree_args)
+      
+      message("Running ModelFinder with UF bootstraps for region ", rg, " ...")
+      message(iqtree_bin, " ", paste(shQuote(args), collapse = " "))
+      
+      iqtree_log <- paste0(prefix, ".run.log")
+      
+      exit_status <- system2(
+        command = iqtree_bin,
+        args = args,
+        stdout = iqtree_log,
+        stderr = iqtree_log
+      )
+      
+      if (!identical(exit_status, 0L)) {
+        warning(
+          "IQ-TREE ModelFinder finished with non-zero exit status for region ",
+          rg,
+          ": ",
+          exit_status,
+          "\nSee log: ",
+          iqtree_log
+        )
+      }
+    } else {
+      message("IQ-TREE result already exists; use force=TRUE to overwrite: ", iqtreefile)
+    }
+    
+    if (!file.exists(iqtreefile)) {
+      warning("Expected IQ-TREE output not found for region ", rg, ": ", iqtreefile)
+      next
+    }
+    
+    iqtxt <- readLines(iqtreefile, warn = FALSE)
+    
+    model_idx <- grep(
+      "Best-fit model according to BIC:",
+      iqtxt,
+      fixed = TRUE
+    )
+    
+    if (length(model_idx) == 0L) {
+      best_model <- NA_character_
+      warning("Could not find model line in ", iqtreefile)
+    } else {
+      best_line <- iqtxt[model_idx[1]]
+      
+      best_model <- stringr::str_trim(
+        sub(
+          ".*Best-fit model according to BIC:\\s*",
+          "",
+          best_line
+        )
+      )
+    }
+    
+    aln <- Biostrings::readDNAStringSet(trimmed_fa)
+    aln_length <- unique(Biostrings::width(aln))[1]
+    
+    results[[rg]] <- data.frame(
+      region = rg,
+      best_model = best_model,
+      aln_length = aln_length,
+      iqtree_file = iqtreefile,
+      stringsAsFactors = FALSE
+    )
+  }
+  
+  model_fits <- dplyr::bind_rows(results)
+  
+  if (nrow(model_fits) == 0 || !"region" %in% names(model_fits)) {
+    stop(
+      "No successful IQ-TREE ModelFinder results were generated.\n",
+      "This usually means the trimmed FASTA files were missing, IQ-TREE failed, ",
+      "or the expected .iqtree files were not created.\n\n",
+      "Check this folder:\n",
+      single_gene_dir
+    )
+  }
+  
+  out_tsv <- file.path(
+    multi_gene_dir,
+    paste0("model_fits_", project_name, ".", region_set_name, ".tsv")
+  )
+  
+  readr::write_tsv(model_fits, out_tsv)
+  
+  message("ModelFinder summary written to: ", out_tsv)
+  
+  invisible(model_fits)
+}
+
+
+# create input files for iqtree concatenated analysis
+concatenate_and_write_partitions <- function(project_name,
+                                             regions_to_include,
+                                             run_dir = NULL) {
+  
+  if (!exists("base_dir", envir = .GlobalEnv)) {
+    stop("`base_dir` is not defined. Run start_project() first.")
+  }
+  
+  paths <- get_phylo_paths(
+    project_name = project_name,
+    regions_to_include = regions_to_include,
+    run_dir = run_dir
+  )
+  
+  regions_to_include <- sort_regions(regions_to_include)
+  region_set_name <- paths$region_set_name
+  prep_dir <- paths$prep_dir
+  multi_gene_dir <- paths$multi_gene_dir
+  
+  if (!dir.exists(prep_dir)) {
+    stop(
+      "Prep directory not found: ",
+      prep_dir,
+      "\nDid you run trim_regions_trimal() for this run?"
+    )
+  }
+  
+  if (!dir.exists(multi_gene_dir)) {
+    dir.create(multi_gene_dir, recursive = TRUE)
+  }
+  
   model_fits_path <- file.path(
     multi_gene_dir,
     paste0("model_fits_", project_name, ".", region_set_name, ".tsv")
   )
+  
   if (!file.exists(model_fits_path)) {
-    stop("model_fits TSV not found: ", model_fits_path,
-         "\nDid you run iqtree_modelfinder_per_region() ?")
+    stop(
+      "model_fits TSV not found: ",
+      model_fits_path,
+      "\nDid you run iqtree_modelfinder_per_region() for this run?"
+    )
   }
   
-  model_fits <- readr::read_tsv(model_fits_path, show_col_types = FALSE)
+  model_fits <- readr::read_tsv(
+    model_fits_path,
+    show_col_types = FALSE
+  )
+  
+  if (!all(c("region", "best_model") %in% names(model_fits))) {
+    stop(
+      "model_fits TSV does not contain the required columns: region, best_model\n",
+      "File checked: ",
+      model_fits_path
+    )
+  }
   
   model_lookup <- model_fits |>
     dplyr::select(region, best_model)
@@ -3545,10 +4795,12 @@ concatenate_and_write_partitions <- function(project_name,
     warning("Some regions in regions_to_include are missing from model_fits TSV.")
   }
   
-  # 2) Read trimmed alignments for each region
   aln_per_region <- list()
+  
   for (rg in regions_to_include) {
+    
     rg_dir <- file.path(prep_dir, rg)
+    
     trimmed_fa <- file.path(
       rg_dir,
       paste0(project_name, ".", region_set_name, "_", rg, ".trimmed.fasta")
@@ -3561,72 +4813,148 @@ concatenate_and_write_partitions <- function(project_name,
     aln_per_region[[rg]] <- Biostrings::readDNAStringSet(trimmed_fa)
   }
   
-  # 3) Build union of taxa and concatenate sequences in the specified order
-  all_taxa <- sort(unique(unlist(lapply(aln_per_region, names))))
-  
-  concat_vec <- vapply(all_taxa, function(taxon) {
-    paste0(
-      vapply(regions_to_include, function(rg) {
-        s <- aln_per_region[[rg]]
-        if (taxon %in% names(s)) {
-          as.character(s[[taxon]])
-        } else {
-          width_rg <- Biostrings::width(s)[1]
-          paste(rep("-", width_rg), collapse = "")
-        }
-      }, FUN.VALUE = character(1)),
-      collapse = ""
+  all_taxa <- sort(
+    unique(
+      unlist(
+        lapply(aln_per_region, names)
+      )
     )
-  }, FUN.VALUE = character(1))
+  )
+  
+  # ------------------------------------------------------------
+  # Write final taxon-by-gene coverage report
+  # ------------------------------------------------------------
+  
+  coverage_df <- data.frame(
+    taxon = all_taxa,
+    stringsAsFactors = FALSE
+  )
+  
+  for (rg in regions_to_include) {
+    coverage_df[[rg]] <- as.integer(all_taxa %in% names(aln_per_region[[rg]]))
+  }
+  
+  coverage_df$genes_present <- rowSums(
+    coverage_df[, regions_to_include, drop = FALSE]
+  )
+  
+  coverage_df$genes_missing <- length(regions_to_include) - coverage_df$genes_present
+  
+  coverage_path <- file.path(
+    multi_gene_dir,
+    paste0("final_taxon_gene_coverage_", project_name, ".", region_set_name, ".tsv")
+  )
+  
+  write.table(
+    coverage_df,
+    coverage_path,
+    sep = "\t",
+    quote = FALSE,
+    row.names = FALSE
+  )
+  
+  message("Final taxon gene coverage written to: ", coverage_path)
+  
+  # ------------------------------------------------------------
+  # Concatenate sequences
+  # ------------------------------------------------------------
+  
+  concat_vec <- vapply(
+    all_taxa,
+    function(taxon) {
+      paste0(
+        vapply(
+          regions_to_include,
+          function(rg) {
+            s <- aln_per_region[[rg]]
+            
+            if (taxon %in% names(s)) {
+              as.character(s[[taxon]])
+            } else {
+              width_rg <- Biostrings::width(s)[1]
+              paste(rep("-", width_rg), collapse = "")
+            }
+          },
+          FUN.VALUE = character(1)
+        ),
+        collapse = ""
+      )
+    },
+    FUN.VALUE = character(1)
+  )
   
   concat_dna <- Biostrings::DNAStringSet(concat_vec)
   names(concat_dna) <- all_taxa
   
-  # 4) Compute partition coordinates (1-based, inclusive)
-  region_lengths <- vapply(regions_to_include, function(rg) {
-    unique(Biostrings::width(aln_per_region[[rg]]))[1]
-  }, FUN.VALUE = integer(1))
+  region_lengths <- vapply(
+    regions_to_include,
+    function(rg) {
+      unique(Biostrings::width(aln_per_region[[rg]]))[1]
+    },
+    FUN.VALUE = integer(1)
+  )
   
   starts <- cumsum(c(1, head(region_lengths, -1)))
-  ends   <- cumsum(region_lengths)
+  ends <- cumsum(region_lengths)
   
   if (unique(Biostrings::width(concat_dna))[1] != tail(ends, 1)) {
     warning("Concatenated alignment length does not match sum of region lengths.")
   }
   
-  # 5) Write concatenated supermatrix FASTA
   concat_path <- file.path(
     multi_gene_dir,
     paste0("concatenated_", project_name, ".", region_set_name, ".fasta")
   )
-  Biostrings::writeXStringSet(concat_dna, filepath = concat_path, format = "fasta")
+  
+  Biostrings::writeXStringSet(
+    concat_dna,
+    filepath = concat_path,
+    format = "fasta"
+  )
+  
   message("Concatenated alignment written to: ", concat_path)
   
-  # 6) Build NEXUS partition file with correct models per region
-  models_ordered <- vapply(regions_to_include, function(rg) {
-    row <- model_lookup[model_lookup$region == rg, , drop = FALSE]
-    
-    if (nrow(row) == 0L || is.na(row$best_model[1])) {
-      warning(
-        sprintf(
-          "No best-fit model found for region '%s'. Using fallback model 'GTR+G'.",
-          rg
+  models_ordered <- vapply(
+    regions_to_include,
+    function(rg) {
+      
+      row <- model_lookup[
+        model_lookup$region == rg,
+        ,
+        drop = FALSE
+      ]
+      
+      if (nrow(row) == 0L || is.na(row$best_model[1])) {
+        warning(
+          sprintf(
+            "No best-fit model found for region '%s'. Using fallback model 'GTR+G'.",
+            rg
+          )
         )
-      )
-      return("GTR+G")
-    }
-    
-    row$best_model[1]
-  }, FUN.VALUE = character(1))
+        
+        return("GTR+G")
+      }
+      
+      row$best_model[1]
+    },
+    FUN.VALUE = character(1)
+  )
   
-  partition_lines <- c("#nexus",
-                       "begin sets;")
+  partition_lines <- c(
+    "#nexus",
+    "begin sets;"
+  )
   
   part_names <- paste0("part", seq_along(regions_to_include))
   
   for (i in seq_along(regions_to_include)) {
-    line <- sprintf("\tcharset %s = %d-%d;",
-                    part_names[i], starts[i], ends[i])
+    line <- sprintf(
+      "\tcharset %s = %d-%d;",
+      part_names[i],
+      starts[i],
+      ends[i]
+    )
+    
     partition_lines <- c(partition_lines, line)
   }
   
@@ -3645,49 +4973,63 @@ concatenate_and_write_partitions <- function(project_name,
     multi_gene_dir,
     paste0("partitions_", project_name, ".", region_set_name, ".nex")
   )
+  
   writeLines(partition_lines, part_path)
+  
   message("Partition NEXUS file written to: ", part_path)
   
-  invisible(list(
-    concat_fasta    = concat_path,
-    partitions_nex  = part_path,
-    regions         = regions_to_include,
-    starts          = starts,
-    ends            = ends,
-    models          = models_ordered
-  ))
+  invisible(
+    list(
+      concat_fasta = concat_path,
+      partitions_nex = part_path,
+      coverage_tsv = coverage_path,
+      coverage = coverage_df,
+      regions = regions_to_include,
+      starts = starts,
+      ends = ends,
+      models = models_ordered
+    )
+  )
 }
+
+
 
 iqtree_multigene_partitioned <- function(
     project_name,
     regions_to_include,
+    run_dir = NULL,
     threads = 8,
     multigene_bootstraps = 1000,
     iqtree_args = c("-m", "MFP+MERGE"),
     force = TRUE
 ) {
+  
   if (!exists("base_dir", envir = .GlobalEnv)) {
     stop("`base_dir` is not defined. Run start_project() first.")
   }
   
-  # 0) IQ-TREE software check
   iqtree_bin <- Sys.getenv("IQTREE_PATH")
+  
   if (!nzchar(iqtree_bin)) {
     stop("IQTREE_PATH is not set in .Renviron.")
   }
+  
   suppressWarnings(system2(iqtree_bin, "-version"))
   
-  # Canonicalize regions + region-set name
-  regions_to_include <- sort_regions(regions_to_include)
-  region_set_name    <- paste(regions_to_include, collapse = ".")
+  paths <- get_phylo_paths(
+    project_name = project_name,
+    regions_to_include = regions_to_include,
+    run_dir = run_dir
+  )
   
-  # 1) Core paths
-  phylo_dir <- file.path(base_dir, "phylogenies", region_set_name)
-  if (!dir.exists(phylo_dir)) {
-    stop("Phylogenies directory does not exist for region set: ", phylo_dir)
+  region_set_name <- paths$region_set_name
+  analysis_dir <- paths$analysis_dir
+  multi_gene_dir <- paths$multi_gene_dir
+  
+  if (!dir.exists(analysis_dir)) {
+    stop("Phylogeny run directory does not exist: ", analysis_dir)
   }
   
-  multi_gene_dir <- file.path(phylo_dir, "multi_gene_trees")
   if (!dir.exists(multi_gene_dir)) {
     stop("Multi-gene tree directory does not exist: ", multi_gene_dir)
   }
@@ -3709,10 +5051,10 @@ iqtree_multigene_partitioned <- function(
   
   expected_treefile <- paste0(iqtree_prefix, ".treefile")
   
-  # 2) Basic checks
   if (!file.exists(concatenated_fasta)) {
     stop("Concatenated alignment not found: ", concatenated_fasta)
   }
+  
   if (!file.exists(partition_nexus)) {
     stop("Partition Nexus file not found: ", partition_nexus)
   }
@@ -3720,46 +5062,63 @@ iqtree_multigene_partitioned <- function(
   if (file.exists(expected_treefile) && !force) {
     stop(
       "IQ-TREE treefile already exists and force = FALSE:\n  ",
-      expected_treefile, "\n",
-      "Set force = TRUE to overwrite or move/rename the existing files."
+      expected_treefile,
+      "\nSet force = TRUE to overwrite or create a new run_dir."
     )
   }
   
-  # 3) Build IQ-TREE command
   args <- c(
-    "-s", concatenated_fasta,
-    "-p", partition_nexus,
-    "--ufboot", as.character(multigene_bootstraps)
+    "-s",
+    concatenated_fasta,
+    "-p",
+    partition_nexus,
+    "--ufboot",
+    as.character(multigene_bootstraps)
   )
   
   if (!any(iqtree_args == "-nt")) {
     args <- c(args, "-nt", as.character(threads))
   }
   
-  args <- c(args, iqtree_args, "--prefix", iqtree_prefix)
+  args <- c(
+    args,
+    iqtree_args,
+    "--prefix",
+    iqtree_prefix
+  )
   
-  message("Running IQ-TREE with command:\n",
-          iqtree_bin, " ", paste(shQuote(args), collapse = " "))
+  message(
+    "Running IQ-TREE with command:\n",
+    iqtree_bin,
+    " ",
+    paste(shQuote(args), collapse = " ")
+  )
   
-  # 4) Run IQ-TREE
-  exit_status <- system2(command = iqtree_bin, args = args)
+  exit_status <- system2(
+    command = iqtree_bin,
+    args = args
+  )
   
   if (exit_status != 0) {
     warning("IQ-TREE finished with non-zero exit status: ", exit_status)
   } else {
     message("IQ-TREE multigene partitioned run completed successfully.")
+    
     if (file.exists(expected_treefile)) {
       message("Treefile: ", expected_treefile)
     }
   }
   
-  invisible(list(
-    status        = exit_status,
-    cmd           = paste(iqtree_bin, paste(args, collapse = " ")),
-    output_prefix = iqtree_prefix,
-    treefile      = expected_treefile
-  ))
+  invisible(
+    list(
+      status = exit_status,
+      cmd = paste(iqtree_bin, paste(args, collapse = " ")),
+      output_prefix = iqtree_prefix,
+      treefile = expected_treefile
+    )
+  )
 }
+
 
 
 
