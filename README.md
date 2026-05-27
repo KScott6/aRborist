@@ -68,10 +68,15 @@ The first time setup is now complete.
 ---
 
 <br>
+<br>
 
 ## aRborist walkthrough
 
+<br>
+
 ### 1) Load packages and helper scripts (run once per new project)
+
+Start by moving into your local aRborist GitHub folder, sourcing the helper script, and loading the required R packages.
 
 ```R
 setwd("~/github/aRborist") # change to your arborist download location
@@ -79,22 +84,27 @@ source(file.path("R", "arborist_helpers.R"))
 load_required_packages()
 ```
 
-### 2) Create a new project workspace (run once per new project)
+<br>
 
-Set the location you prefer to have your aRborist project folder in; ("~") is default. Then, select a unique name for your project. You can revisit individual projects later on by referencing their project name.
+### 2) Create or reopen a project workspace
+
+Choose a unique project name. This name will be used to create the project folder and to name many of the output files.
 
 ```R
 project_name <- "Blackwellomyces_tree_2025_10_16"
 ```
 
-Then run:
+Then create the project workspace:
 
 ```R
 start_project(project_name = project_name)
-
 ```
 
-This will automatically create the necessary project folders and subfolders. (~/github/aRborist/projects/Blackwellomyces_tree_2025_10_16)
+By default, this creates a project folder inside the aRborist project directory, for example: ~/github/aRborist/projects/Blackwellomyces_tree_2025_10_16
+
+If the project already exists, start_project() can be run again to reload the project settings and continue working in the same project.
+
+<br>
 
 ### 3) Set options for your project
 
@@ -121,6 +131,10 @@ Exaplaination of options:
 `ncbi_api_key` Your NCBI API key. If you didn't set up your R environment with your API key, you can specify it here in quotes.
 
 `my_lab_sequences` Optional. If you want to include your own lab sequences, provide a 5-column csv with Accession, strain, sequence, organism, and gene columns (see [example_lab_seq_input.csv](example_data/example_lab_seq_input.csv) for an example).
+
+`literature_accessions` Optional, used in multi-gene tree pipeline. A table of literature-derived accessions that should be tracked and optionally prioritized during region selection. Table must contain columns named paper_id, region, and accession. Optional additional columns such as strain or organism names may also be included. (see [example_literature_acc.tsv](example_data/example_literature_acc.tsv) for an example).
+
+   The provided literature accessions are flagged in the curated metadata, tracked in the attendance sheets, (optionally) prioritized during region selection, and any literature accessions not found in your metadata are recorded to the missing_literature_accessions_<project>.csv report.
 
 ```R
 # Set options for this project
@@ -150,7 +164,8 @@ search_exclude <- c(
 
 max_acc_per_taxa <- 1000   # use "max" to retrieve all matching hits
 ncbi_api_key <- Sys.getenv("NCBI_API_KEY")
-my_lab_sequences <- ""
+my_lab_sequences <- "/path/to/my_lab_sequences.tsv" # put "" if you have no lab sequecnes to add
+literature_accessions <- "/path/to/literature_accessions.tsv" # put "" if you have no literature accesssions to flag
 
 # Save the exact options you used in your project folder
 save_project_config(
@@ -162,6 +177,8 @@ save_project_config(
 )
 
 ```
+
+<br>
 
 ### 4) Collect metadata
 
@@ -316,18 +333,54 @@ If you see the full paths you just set, you are good to go.
 
 <br>
 
+## Restarting a project
+
+Remember - you can restart or jump between projects at any time by running the start_project command with the desired project name. If you just got done restarting your R instance to install the alignment and trimming software and you wanted to restart the test project, run these commands:
+
+```R
+# load up arborist packages
+setwd("~/github/aRborist") # change to your arborist download location
+source(file.path("R", "arborist_helpers.R"))
+load_required_packages()
+
+# specify the name of your project
+arborist_home <- "/Users/scott/aRborist_Projects"
+project_name <- "Blackwellomyces_tree_2025_10_16"
+
+# then start your project again
+start_project(project_name = project_name)
+```
+
+<br>
+
+## 0) Optional: adding lab sequences and/or flagging accessions
+
+If you are using custom lab sequences or literature accession flags, run those steps before region curation:
+
+```R
+merge_metadata_with_custom_file(project_name)
+
+flag_literature_accessions(
+  project_name = project_name,
+  literature_accessions = literature_accessions
+)
+```
+
 ## 1) Standardizing region names
 
 You need to further curate your metadata so that the gene region information is useable. The goal is to assign a consistent set of region identifiers for each accession, even when the original records use messy or compound descriptions.
 
-a) Before running this step, make sure you have run the basic curation step and have this file: ./metadata_files/all_accessions_pulled_metadata_<project_name>_curated.csv
+(!) Before running this step, make sure you have run the basic curation step and have this file: ./metadata_files/all_accessions_pulled_metadata_<project_name>_curated.csv
    
-This step uses a user-editable "replacement patterns" file to detect and standardize region names (e.g., ITS, TEF, RPB2, LSU, SSU). You can add as many fragments as you want to catch multi-region descriptions. Each hit appends to the component list for that field. If you forget to include a pattern, aRborist will still flag common regions (ITS, LSU, SSU) automatically as a fallback. Any accessions with unmatched gene, product, AND acc_title categories will be logged in a separate file.
+This step uses a user-editable "replacement patterns" file (example_data/region_replacement_patterns.csv) to detect and standardize region names (e.g., ITS, TEF, RPB2, LSU, SSU). 
 
-b) The region replacement patterns is file located here: ./aRborist/example_data/region_replacement_patterns.csv
+Each "pattern" is a regular expression (regex) that will be searched (case-insensitive) in the "gene", "product", and "accession_title" metadata text fields.
 
-Each "pattern" is a regular expression (regex) that will be searched (case-insensitive) in the "gene", "product", and "acc_title" metadata text fields.
 Each "standard" is the region name or label you want assigned when that pattern is found.
+
+You can add as many fragments as you want to catch multi-region descriptions. Make sure to adjust for ambiguous fragments (e.g. specify matching to any "\bACT\b" instead of just "ACT", so phrases like "D**act**ylonectria beta-tubulin" aren't mis-labeled)
+
+Each hit appends to the component list for that field. Any accessions with unmatched gene, product, AND acc_title categories will be logged in a separate file.
 
 You can add as many lines as you want, the file acts as a flexible compound detector.
 
@@ -343,63 +396,59 @@ aRborist will then perform the same pattern search for the "product" and "acc_ti
 
 Then, aRborist combines the component fields to assign a final "region.standard" column using the priority: gene.region.components > product.region.components > acc_title.region.components
 
-If you notice accessions in the new unmatched regions file (./metadata_files/unmatched_regions_Blackwellomyces_tree.csv), you can simply add the necessary pattern information to the replacement patterns file, save, and re-run the region curation step. It's not essential that every accession be assinged a region - you can stop whenever you feel you have captured all the useful information from the accessions you care about. 
+If you notice accessions in the new unmatched regions file (./metadata_files/unmatched_regions_Blackwellomyces_tree.csv), you can simply add the necessary pattern information to the replacement patterns file, save, and re-run the region curation step. It is not necessary for every accession to receive a region assignment. The practical goal is to capture the regions needed for the phylogeny.
+
+<br>
 
 To run the region curation step:
 
 ```R
 curate_metadata_regions(project_name)
 ```
+
  <br> 
 
 ## 2) Filter metadata to desired regions
 
-Now that you have a more curated metadata file for the project, the next step is to narrow it down to just the accessions that will be used to build a tree. In aRborist, we do this by telling the pipeline which marker(s) we want to use (e.g. ITS, TEF, RPB2), and the script will pull out only the accessions that match those markers. This produces a clean, region-specific dataset that the alignment/trim steps can use later.
+After region standardization, the next step is to select the loci that will be used for phylogenetic analysis and generate a filtered region attendance sheet.
 
-Remember - you can restart or jump between projects at any time by running the start_project command with the desired project name. If you just got done restarting your R instance to install the alignment and trimming software and you wanted to restart the test project, run these commands:
-
-```R
-# load up arborist packages
-arborist_repo <- normalizePath("~/github/aRborist")
-source(file.path(arborist_repo,"R", "arborist_helpers.R"))
-load_required_packages()
-
-# restart with the name of your project
-start_project(project_name = "Blackwellomyces_tree")
-```
-
-Then, to filter the metadata, 
+This step creates a subfolder in /phyogenies named after the specified regions of interest. All downstream analyses will be stored in this subfolder, unless the regions of interest are changed. 
 
 ```R
+regions_to_include <- c("ITS", "TEF")
+
 select_regions(project_name,
-               regions_to_include = c("ITS", "TEF"),
+               regions_to_include = regions_to_include,
                acc_to_exclude = character(0),
                min_region_requirement = 2)
 ```
 
-`regions_to_include` Provide a list of loci of interest. These terms will match the "standard" region names you specified in the region curation step. Otherwise, use standard NCBI region names such as ITS, TEF, RPB1, etc.
+`regions_to_include` Provide a vector of the standardized region names you want to include in the phylogeny. These terms will match the "standard" region names you specified in the region curation step. Otherwise, use standard NCBI region names such as ITS, TEF, RPB1, etc.
 
-`min_region_requirement` The number of user-specified loci an isolate must have in order to progress to be included in final downstream analyses. 
+`min_region_requirement` Controls how many of the requested loci a strain must possess to remain in the downstream dataset.
 
-What this step does:
+`acc_to_exclude` Optional vector of specific accessions to remove before region selection. This is useful when duplicate or low-quality accessions exist for the same strain and region.
 
-1) Filters the metadata to only consider accessions of regions that you are interested in.
+   example: acc_to_exclude <- c("PP464689", "PP464690")
 
-2) Filters the data to only include strain with X number of regions (you set the cutoff).
+`allow_compound_regions_for` Allows accessions to be assigned to "compound" regions.
 
-If you set
+   Some NCBI accessions contain multiple loci in a single sequence, for example: ITS;LSU;SSU. By default, aRborist allows compound-region accessions to satisfy searches for ITS (since it is so often submitted with partial LSU and SSU seqences). This means that an accession annotated as ITS;LSU;SSU will by default be selected when requesting ITS sequences. For all other loci, exact region matching is required unless explicitly added to allow_compound_regions_for. For example: allow_compound_regions_for = c("ITS", "LSU") would allow compound annotations containing LSU to be included during LSU selection.
 
-> min_region_requirement <- length(regions_to_include)
+`prefer_literature_accessions` Optional setting that prioritizes literature-derived accessions during duplicate resolution. When TRUE, accessions flagged in flag_literature_accessions() are preferentially selected if multiple accessions exist for the same strain and region. Only one accession per strain × region combination is retained in the attendance sheet. Manual edits to the attendance sheet always override automatic accession selection.
 
-then only strains that have ALL of the regions you asked for will be kept (strict mode).
+<br>
 
-And if you set
+This step produces:
 
-> min_region_requirement <- 1
+1) selected_accessions_metadata_<project>.<region_set>.csv : A long-format metadata file containing only the selected regions.
 
-then any strain that has at least one of the regions will be kept.
+2) Region_attendance_sheet_<project>.<region_set>.csv : A wide-format attendance sheet showing one row per strain and one column per region.
 
-Important note about duplicates:  Public metadata is messy, and it’s common to have more than one accession for the same strain and the same region (for example, two ITS sequences submitted at different times). In this step, the script keeps only one accession per strain × region combination. 
+3) region_selection_policy_<project>.<region_set>.txt : a record of the exact filtering settings used during selection.
+
+
+(!) Important note about duplicates:  Public metadata is messy, and it’s common to have more than one accession for the same strain and the same region (for example, two ITS sequences submitted at different times). In this step, the script keeps only one accession per strain × region combination. 
 
 So if you are trying to include a particular accession, but you find that a duplicate entry or entires keeps being used in place of your desired accession, you can specify to remove those particular accessions with the "acc_to_exclude" option, like so:
 
@@ -407,18 +456,82 @@ So if you are trying to include a particular accession, but you find that a dupl
 
 <br>
 
-## 3) Create multifastas
+## 3) Creating a phylogeny run directory
+
+After selecting the desired loci and generating the initial attendance sheet, the next step is to create a dedicated phylogeny run directory. This step creates a self-contained working directory for a specific phylogenetic analysis within the region set subfolder in /phylogenies.
+
+Many phylogenetic projects involve multiple rounds of filtering, alignment trimming, manual editing, or exploratory analyses. Rather than overwriting earlier outputs, aRborist stores each phylogeny attempt in its own run folder.
+
+You can and should modfiy the run_label and re-run this command and whenever you are modifying the input accessions for tree creation. This way, you can compare files/trees across your analyses.
+
+```R
+run_dir <- start_phylogeny_run(
+  project_name,
+  regions_to_include,
+  run_label = "standard1"
+)
+```
+
+`run_label` A short descriptive label for the phylogeny run. 
+
+<br>
+
+## 4) Optional (BUT HIGHLY RECOMMENDED): Manual editing of strains/accessions
+
+Before generating multifastas and alignments, it is often useful to manually review and edit the input data. Chances are, there are strains or accessions that you don't especially want in any downstream analysis connected to this project. You can manually edit the accessions/strains that are included in future analyses by editing the primary attenance sheet. 
+
+Any change made to this primary attendance sheet will be propagated to the subsequent run folders for this project. (i.e. if you remove an accession from the primary attendance sheet, any analyses created after this change will not have this accession.)
+
+The primary attendance sheet is located here:
+
+```text
+~/github/aRborist/projects/<project_name>/phylogenies/<region_set>/Region_attendance_sheet_<project_name>.<region_set>.csv
+```
+
+This file controls which strains and accessions are included in the downstream phylogeny workflow.
+
+Each row represents a strain, and each region column contains the accession selected for that locus.
+
+You can control the sequences present in the downstream analyses by:
+
+* disregard certain strains from being included (recommend action: see include_in_tree section)
+* permanently removing problematic strains (delete entire row)
+* permanently removing accessions known to be of poor quality or contaminant origin (replace select accession with NA)
+* replacing accessions (edit accession)
+
+
+#### include_in_tree : Temporary inclusion/exclusion
+
+Sometimes you may want to temporarily remove strains from a particular analysis without permanently deleting them from the attendance sheet.
+
+To do this, add a new column named: include_in_tree
+
+Then, for any strain you DO want in your analysis, specify TRUE in that column.
+
+If you created this column, when running the next step (create_multifastas) you need to specify use_tree_filter = TRUE
+
+<br>
+
+## 5) Create multifastas
 
 To create multifastas that contain the RAW sequence data from NCBI, run this command:
 
 ```R
-create_multifastas(project_name, regions_to_include)
+create_multifastas(
+  project_name,
+  regions_to_include,
+  run_dir = run_dir,
+  use_tree_filter = TRUE
+)
 ```
 
-You will see a multifasta appear for each of the regions you specified. For example: "./Blackwellomyces_tree/phylogenies/ITS.RPB2.TEF/prep/ITS/Blackwellomyces_tree.ITS.RPB2.TEF.ITS.raw.fasta"
+Only specify use_tree_filter = TRUE if you actually created the include_in_tree column and want to use those selected strains. 
 
+You will see a multifasta appear for each of the regions you specified.
 
-## 4) Align each region
+<br>
+
+## 6) Align each region
 
 Once the raw multifasta files are created for each region, the next step is to align the sequences. This step is carried out separately for each region you specified. By default, aRborist uses the alignment software MAFFT (although I may add more alignment software options in the future).
 
@@ -445,11 +558,11 @@ Important parameters:
 
 After this step, each region folder will contain the aligned multifastas (<region>.aligned.fasta) as well as the log file from the mafft run (<region>.mafft.log). The aligned files are ready for trimming. 
 
-Note:  Before proceeding further, I recommened checking the alignments with a alignment GUI just to make sure there isn't any rouge sequneces messing up the alignment. If someone uploaded a TEF sequence but labeled it as TEF, this could really mess up your alignment and any downstream processes. 
+Note:  Before proceeding further, I recommened checking the alignments with a alignment GUI just to make sure there isn't any rouge sequneces messing up the alignment. If someone uploaded a TEF sequence but labeled it as ITS, this could really mess up your alignment and any downstream processes. 
 
 <br>
 
-## 5) Trim each region
+## 7) Trim each region
 
 After alignment, many columns in the alignment may contain mostly gaps or poorly aligned positions. We also need to ensure that all the sequences for a particular region are the same length. aRborist uses TrimAl to perform these steps. 
 
@@ -466,14 +579,43 @@ Important parameters:
 `trimal_args` : allows you to pass different TrimAl parameters. For example:
    - "-automated1" : trimAl automatically select thresholds for maximum allowed gap percentage per column, minimum overlap between sequences, and conservation scores.
    - check the TrimAl manual for more options
+   - Some of my favorite options: 
+     - "-gt", "0.9", 
+     - "-cons", "60", 
+     - "-resoverlap", "0.8", 
+     - "-seqoverlap", "75"
 
 After this step, you will see a multifasta for the trimmed and aligned files (<region>.trimmed.fasta) as well as the log file from the mafft run (<region>.trimal.log).
 
 <br>
 
-## 6) Create single-gene trees
+## 8) Generate the final region attendance sheet 
 
-Once you have trimmed alignments for each gene, the next step is to generate individual maximum-likelihood trees for each of your specified regions. If you are only interested in making a phylogeny from a single region, you can stop after this step as you will have your final tree (./single_gene_trees/<region>/<project>.<region>.modeltest.contree). 
+After alignment and trimming, some sequences may be automatically removed during the trimming process. For example, highly incomplete, poorly aligned, or problematic sequences may no longer be present in the final trimmed FASTA files depending on which trimal parameters you used. So, a new attendance sheet must be produced to reflect the final set of accessions used.
+
+To generate a final attendance sheet reflecting only the sequences that survived trimming, run:
+
+```R
+write_final_region_attendance_sheet(
+  project_name,
+  regions_to_include,
+  run_dir = run_dir
+)
+```
+
+This step compares:
+
+* the intended attendance sheet,
+* the aligned FASTA files,
+* the trimmed FASTA files,
+
+and determines which accessions successfully made it into the final trimmed alignments.
+
+<br>
+
+## 9) Create single-gene trees
+
+Once you have trimmed alignments for each gene, the next step is to generate individual maximum-likelihood trees for each of your specified regions. If you are only interested in making a phylogeny from a single region, you can stop after this step as you will have your final tree.
 
 If you are going to make a multi-gene tree, this step is still essential to identify the best substitution model for region region, as well as helping you find problematic loci, identify outliers, and confirm that sequences are behaving as expected before concatenation. 
 
@@ -486,23 +628,28 @@ iqtree_modelfinder_per_region(
   threads = 8, # or whatever you like
   single_gene_bootstraps = 1000, # default bootstrap #          
   iqtree_args = c("-m", "MFP+MERGE"),   # MFP+MERGE necessary for model ID; you can add more IQ-TREE options here if needed
+  run_dir = run_dir,
   force = TRUE
 )
 ```
 
 <br>
 
-## 7) Create files necessary for multi-gene tree creation
+## 10) Create files necessary for multi-gene tree creation
 
 The next step is to create the necessary files for the multi-gene tree in IQ-TREE. This step will create a concatenated supermatrix from the trimmed and aligned sequences, as well as a nexus (.nex) file that will store the sequence length and best substition model for each region. 
 
 ```R
-concatenate_and_write_partitions(project_name, regions_to_include)
+concatenate_and_write_partitions(
+  project_name,
+  regions_to_include,
+  run_dir = run_dir
+)
 ```
 
 <br>
 
-## 8)  Create multi-gene tree with partitioned analysis
+## 11)  Create multi-gene tree with partitioned analysis
 
 When creating phylogenies from multiple genes, I prefer to run a [partitioned analysis](https://iqtree.github.io/doc/Advanced-Tutorial) rather than use a single substituion model with the concatenated supermatrix. 
 
@@ -514,6 +661,7 @@ This command will run a partitioned analysis in IQ-TREE:
 iqtree_multigene_partitioned(
   project_name,
   regions_to_include,
+  run_dir = run_dir,
   threads = 8,
   multigene_bootstraps = 1000,
   iqtree_args = c("-redo"),
@@ -523,6 +671,8 @@ iqtree_multigene_partitioned(
 
 After this step, the multi-gene phylogeny pipeline is complete. You can find your final consensus tree file here: (./multi_gene_trees/iqtree_<project_name>.<regions>.contree). 
 
+<br>
+<br>
 <br>
 
 ## Software citations
