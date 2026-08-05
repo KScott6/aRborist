@@ -124,7 +124,7 @@ Explaination of options:
 
 `raw_entrez_terms` (advanced) Supply one or more complete Entrez queries to run exactly as written. When this option is used, aRborist skips its normal query construction and instead submits your query directly to NCBI. This makes it possible to search using any **valid** Entrez syntax. Each element of raw_entrez_terms should be a named vector or list, where the name is used internally by aRborist (filenames, checkpoints, grouping) and the value is the Entrez query. When using raw_entrez_terms, the search_include and search_exclude options are ignored. 
 
-  This option is particularly useful when you need to run complex seaches. For example, in the past I have used this option to search for any accession with host metadata matching particular patterns.
+    This option is particularly useful when you need to run complex seaches. For example, in the past I have used this option to search for any accession with host metadata matching particular patterns.
 
 `max_acc_per_taxa` Provive integer value to specify the maximum number of accessions to obtain for each taxon name. Use the option "max" to retrieve **all** the matching NCBI hits -- but be warned that for taxa with many accessions (Fusarium, Alternaria, etc.) this can make the metadata retreival step take **<u>a really long time</u>** (days). 
 
@@ -183,8 +183,6 @@ save_project_config(
 ### 4) Collect metadata
 
 **Important:** This can be VERY time-intensive for large datasets.
-
-(With my default parameters, I retrieved ~410,000 accessions and it took ~4 days to get all the metadata)
 
 **Tip:** For very large runs, consider testing your pipeline on a small subset first (e.g., max_acc_per_taxa = 50) to confirm that your search parameters behave as expected before scaling up.
 
