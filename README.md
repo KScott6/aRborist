@@ -80,7 +80,7 @@ Start by moving into your local aRborist GitHub folder, sourcing the helper scri
 
 ```R
 setwd("~/github/aRborist") # change to your arborist download location
-source(file.path("R", "arborist_helpers.R"))
+source("~/github/aRborist/R/arborist_helpers.R") # or whereever you downloaded the arborist files
 load_required_packages()
 ```
 
@@ -108,7 +108,7 @@ If the project already exists, start_project() can be run again to reload the pr
 
 ### 3) Set options for your project
 
-Exaplaination of options:
+Explaination of options:
 
 `taxa_of_interest` Provide one or more genus/species names to search on NCBI, or provide a file that contains a list.
 
@@ -122,9 +122,9 @@ Exaplaination of options:
 
 `search_exclude` A character vector of NCBI search filters that should be excluded from the search.
 
-`raw_entrez_terms` Provide a string to be directly searched on NCBI. This option bypasses the automatic query construction and instead uses a manually supplied Entrez query exactly as written. If you specify anything for this option, all terms in `search_include` and `search_exclude` are ignored, so do not include these variables in your ncbi_data_fetch command.
+`raw_entrez_terms` (advanced) Supply one or more complete Entrez queries to run exactly as written. When this option is used, aRborist skips its normal query construction and instead submits your query directly to NCBI. This makes it possible to search using any **valid** Entrez syntax. Each element of raw_entrez_terms should be a named vector or list, where the name is used internally by aRborist (filenames, checkpoints, grouping) and the value is the Entrez query. When using raw_entrez_terms, the search_include and search_exclude options are ignored. 
 
-   Normally, aRborist assumes each entry in taxa_of_interest is a plain organism name (e.g. "Fusarium"), and automatically builds an Entrez query using the helper filters and organism scope settings. This works well for most projects, but doesn't work so well when very specific NCBI search behavior is needed. You will need to pass a placeholder term in taxa_of_interest which will be used as the internal label used by aRborist for filenames and downstream grouping. If you use this option, you cannot use the optional taxa filtering in the inital curation step of the metadata curation; you must pass taxa_of_interest = NULL .
+  This option is particularly useful when you need to run complex seaches. For example, in the past I have used this option to search for any accession with host metadata matching particular patterns.
 
 `max_acc_per_taxa` Provive integer value to specify the maximum number of accessions to obtain for each taxon name. Use the option "max" to retrieve **all** the matching NCBI hits -- but be warned that for taxa with many accessions (Fusarium, Alternaria, etc.) this can make the metadata retreival step take **<u>a really long time</u>** (days). 
 
@@ -159,7 +159,7 @@ search_exclude <- c(
 # or, for raw string searching:
 
 #raw_entrez_terms <- list(
-#  Nectriaceae_unclassified = 'Nectriaceae sp.[porgn:__txid1756110] NOT uncultured[All Fields]'
+#  Nectriaceae_unclassified = 'Nectriaceae sp.[porgn:__txid1756110] AND host=C* NOT uncultured[All Fields]'
 #)
 
 max_acc_per_taxa <- 1000   # use "max" to retrieve all matching hits
@@ -190,7 +190,9 @@ save_project_config(
 
 About NCBI search behavior:  standard NCBI searches are not perfectly constrained to the "organism" field. For example, if you search "Pandora[organism]", NCBI will return all accessions explictedly labeled as "Pandora" in the "organism" field, as well as any accessions that have "Pandora" located anywhere in the metadata (such as in the "notes" or "Title" field). It will also include any accession that was historically named "Pandora" as well, I believe.  This is frustrating, as it will slow down your search by including accessions you don't care about. I haven't found a foolproof way around this yet. I've tried a few workarounds (like constraining the search with "Pandora"[Organism:noexp]"), but this appears to still let a few unwanted accessions appear in the search. I've addressed this later on in the curation steps - there is a step that by default filters out any accession whose organism name doesn't match to your list of target taxa. As a result, you will probably have more accessions listed in your various intermediate files than you do in your final metadata file; this is normal and not a cause for concern.
 
-Metadata retrieval is checkpointed by taxon (e.g., genus). Each taxon is written to its own file during the run (./metadata_files/metadata_checkpoints/metadata_<taxon>.csv). If the run is interrupted (e.g., laptop sleeps, internet drops, R crashes), progress is not lost! Re-running the same command with "resume = TRUE" will automatically skip metadata retreival for taxa that have already completed and will continue from where the run left off.
+Both accession retrieval and metadata retrieval are checkpointed automatically. If the run is interrupted (computer restart, internet outage, R crash, etc.), rerunning the same command with resume = TRUE (the default) continues from the last completed checkpoint instead of starting over. 
+
+Large projects containing hundreds of thousands of accessions may run for several days, so checkpointing is strongly recommended.
 
 <br>
 
