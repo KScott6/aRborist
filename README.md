@@ -1,21 +1,27 @@
 ## Overview
 
-aRborist is an automated sequence and metadata harvester designed to simplify the process of gathering and organizing sequence data and metadata from the **NCBI nucleotide database**. It retrieves accessions for specified taxa, extracts and standardizes metadata, and prepares sequences and metadata for downstream analyses. After using aRborist to pull metadata/sequence data, you can use other aRborist functions to help you make a phylogenetic tree. Or assign host information to your taxa of interest.
+aRborist is an automated sequence and metadata harvester designed to simplify the process of gathering and organizing sequence data and metadata from the **NCBI nucleotide database**. It can automatically retrieve NCBI accessions for specified taxa, extracts and standardizes metadata, and prepares sequences and metadata for downstream analyses. 
 
 - **aRborist Input:** a list of taxa (a list of genus/species names) and a few simple options (loci of interest, your NCBI API, etc.)  
 - **aRborist Output:** curated metadata sheets (can be used to create phylogenetic trees or assign host to taxa, using downstream aRborist pipelines)
 
 
-### Requirements
+After using aRborist to download and curate metadata/sequence data, you can choose to use downstream aRborist functions to:
+
+1) Create a phylogenetic tree[#arborist_phylogenetic_tree_pipeline], or 
+2) Evalute the host incidence across to your taxa of interest[#arborist_host_assessment_pipeline].
+
+
+### aRborist Requirements
 
 - R (≥ 4.2)
 - RStudio (optional but recommended)
 - Internet access to query NCBI
-- (Recommended) an NCBI API key
+- (Highly recommended) an NCBI API key
 
 ### Disclaimer and Limitations
 
-The accuracy and completeness of your results depend on the quality of metadata available in NCBI. While aRborist applies consistent naming, standardization, and error-handling routines, it cannot correct for missing, inconsistent, or ambiguous source data. I encourage users to review and, if necessary, manually refine the curation rules for your own use.
+The accuracy and completeness of your results depend on the quality of sequence data and metadata available in NCBI. While aRborist applies consistent naming, standardization, and error-handling routines, it cannot correct for missing, inconsistent, or ambiguous source data. I encourage users to review and, if necessary, manually refine the curation rules for your own use.
 
 ---
 
@@ -23,19 +29,21 @@ The accuracy and completeness of your results depend on the quality of metadata 
 
 ### 1) (Recommended) Set your NCBI API key 
 
-This increases the NCBI allowed request rates. Get your API key by logging into your NCBI account, open Account settings, and scroll down to "API Key Management". You can then copy your API key.
+This increases the NCBI allowed request rates. Get your NCBI API key by logging into your NCBI account, open Account settings, and scroll down to "API Key Management". You can then copy your API key.
 
-Create (or edit) a file named ~/.Renviron and add:
+Create your ~/.Renviron file and add the following line:
 
 ```bash
 NCBI_API_KEY=YOUR_KEY_HERE
 ```
 
-Save this file and restart your R instance. Then in R:
+Save this file and restart your R instance. Then, run the following line in R:
 
 ```R
-Sys.getenv("NCBI_API_KEY")  # should show your key (or at least not be empty)
+Sys.getenv("NCBI_API_KEY")
 ```
+
+You should see your NCBI API key. 
 
 <br>
 
@@ -47,7 +55,7 @@ install.packages("usethis") # if needed
 usethis::create_from_github("KScott6/aRborist")
 ```
 
-This will automatically create an R project file "aRborist.Rproj". You can working in this project file.
+This will download the aRborist scriptset from GitHub. It should also automatically create an R project file called "aRborist.Rproj". You can test out aRborist in this project file if you choose.
 
 <br>
 
@@ -63,7 +71,8 @@ setwd("/Users/scott/github/aRborist") # change to your download location.
 source(file.path("R", "prepare.R"))  # installs any missing packages required by aRborist
 ```
 
-The first time setup is now complete.
+The aRborist first time setup is now complete. You will now be able to run the basic aRborist functions.
+
 
 ---
 
@@ -74,9 +83,9 @@ The first time setup is now complete.
 
 <br>
 
-### 1) Load packages and helper scripts (run once per new project)
+### 1) Load packages and helper scripts
 
-Start by moving into your local aRborist GitHub folder, sourcing the helper script, and loading the required R packages.
+Start by moving into your local aRborist GitHub folder, sourcing the arborist_helpers script, and loading the required R packages. You will need to do this at the start of each project or any time you restart R.
 
 ```R
 setwd("~/github/aRborist") # change to your arborist download location
@@ -88,19 +97,16 @@ load_required_packages()
 
 ### 2) Create or reopen a project workspace
 
-Choose a unique project name. This name will be used to create the project folder and to name many of the output files.
+Choose a unique project name. This name will be used to create the project folder and to name many of the output files. You will also need to run start_project to resume your project if you restart R.
+
+Throughout this walkthrough, I'll use a Blackwellomyces phylogeny analysis as an example:
 
 ```R
 project_name <- "Blackwellomyces_tree_2025_10_16"
-```
-
-Then create the project workspace:
-
-```R
 start_project(project_name = project_name)
 ```
 
-By default, this creates a project folder inside the aRborist project directory, for example: ~/github/aRborist/projects/Blackwellomyces_tree_2025_10_16
+This will create a project folder inside the aRborist project directory (~/github/aRborist/projects/Blackwellomyces_tree_2025_10_16)
 
 If the project already exists, start_project() can be run again to reload the project settings and continue working in the same project.
 
@@ -108,9 +114,52 @@ If the project already exists, start_project() can be run again to reload the pr
 
 ### 3) Set options for your project
 
-Explaination of options:
+For my example Blackwellomyces analysis, these are the options I selected. 
 
-`taxa_of_interest` Provide one or more genus/species names to search on NCBI, or provide a file that contains a list.
+```R
+taxa_of_interest <- c("Blackwellomyces", "Flavocillium") # I'm interested in downloading Blackwellomyces sequences, as well as Flavocillium for outgroup sequences
+
+# or, specify the path to a list of taxa:
+# taxa_of_interest <- read_lines("/Users/$USER/Desktop/list_of_genera.txt")
+
+organism_scope <- "txid4751[Organism:exp]" # I'm restricting the search to Fungi, so I get fewer extraneous NCBI results
+
+search_include <- c(
+  "biomol_genomic[PROP]",
+  "(100[SLEN]:5000[SLEN])"
+) # I'm specifying that I want sequences which are 100-5000 bp long
+
+search_exclude <- c(
+  "Contig[All Fields]",
+  "scaffold[All Fields]",
+  "genome[All Fields]"
+) # I'm specifying that I don't want sequences that are labeled as contigs, scaffolds, or part of a genome submission
+
+# If I was using raw string searching, I would NOT specify search_include or search_exclude, and instead search using a string I know would be accepeted by NCBI search function. Like this:
+#raw_entrez_terms <- list(
+#  Nectriaceae_unclassified = 'Nectriaceae sp.[porgn:__txid1756110] AND host=C* NOT uncultured[All Fields]')
+
+max_acc_per_taxa <- 1000   # specify "max" to retrieve all matching hits
+ncbi_api_key <- Sys.getenv("NCBI_API_KEY")
+my_lab_sequences <- "" # put "" if you have no lab sequences to add
+literature_accessions <- "" # put "" if you have no literature accesssions to flag
+
+# Save the exact options you used in your project folder, for future reference
+save_project_config(
+  project_name = project_name,
+  taxa_of_interest = taxa_of_interest,
+  my_lab_sequences = my_lab_sequences,
+  organism_scope = organism_scope,
+  max_acc_per_taxa = max_acc_per_taxa
+)
+
+```
+
+<br>
+
+Explanation of options:
+
+`taxa_of_interest` Provide one or more genus/species names to search on NCBI, or provide a path to a file that contains a list of taxa.
 
 `organism_scope` Change to your target taxa's correct kingdom. This help reduce incorrect hits. Leave as "" to remove this restriction, though that is usually not recommended. Examples:
 
@@ -124,73 +173,25 @@ Explaination of options:
 
 `raw_entrez_terms` (advanced) Supply one or more complete Entrez queries to run exactly as written. When this option is used, aRborist skips its normal query construction and instead submits your query directly to NCBI. This makes it possible to search using any **valid** Entrez syntax. Each element of raw_entrez_terms should be a named vector or list, where the name is used internally by aRborist (filenames, checkpoints, grouping) and the value is the Entrez query. When using raw_entrez_terms, the search_include and search_exclude options are ignored. 
 
-    This option is particularly useful when you need to run complex seaches. For example, in the past I have used this option to search for any accession with host metadata matching particular patterns.
+  This option is particularly useful when you need to run complex seaches. For example, in the past I have used this option to retrieve accessions via wildcard (*) seaching of the host metadata.
 
 `max_acc_per_taxa` Provive integer value to specify the maximum number of accessions to obtain for each taxon name. Use the option "max" to retrieve **all** the matching NCBI hits -- but be warned that for taxa with many accessions (Fusarium, Alternaria, etc.) this can make the metadata retreival step take **<u>a really long time</u>** (days). 
 
 `ncbi_api_key` Your NCBI API key. If you didn't set up your R environment with your API key, you can specify it here in quotes.
 
-`my_lab_sequences` Optional. If you want to include your own lab sequences, provide a 5-column csv with Accession, strain, sequence, organism, and gene columns (see [example_lab_seq_input.csv](example_data/example_lab_seq_input.csv) for an example).
+`my_lab_sequences` Optional. If you want to include your own lab sequences, provide the absolute path to a 5-column csv with Accession, strain, sequence, organism, and gene columns (see [example_lab_seq_input.csv](example_data/example_lab_seq_input.csv) for an example).
 
-`literature_accessions` Optional, used in multi-gene tree pipeline. A table of literature-derived accessions that should be tracked and optionally prioritized during region selection. Table must contain columns named paper_id, region, and accession. Optional additional columns such as strain or organism names may also be included. (see [example_literature_acc.tsv](example_data/example_literature_acc.tsv) for an example).
+`literature_accessions` Optional, this option is used in multi-gene tree pipeline. Provide the absolute path to a tsv file which contains a table of literature-derived accessions which will be tracked and optionally prioritized during the region selection. The table must contain columns named paper_id, region, and accession. Optional additional columns such as strain or organism names may also be included. (see [example_literature_acc.tsv](example_data/example_literature_acc.tsv) for an example).
 
    The provided literature accessions are flagged in the curated metadata, tracked in the attendance sheets, (optionally) prioritized during region selection, and any literature accessions not found in your metadata are recorded to the missing_literature_accessions_<project>.csv report.
 
-```R
-# Set options for this project
-taxa_of_interest <- c("Blackwellomyces", "Flavocillium")
-
-# or, read in a file like this:
-# taxa_of_interest <- read_lines("/Users/$USER/Desktop/genera.txt")
-
-organism_scope <- "txid4751[Organism:exp]"
-
-search_include <- c(
-  "biomol_genomic[PROP]",
-  "(100[SLEN]:5000[SLEN])"
-)
-
-search_exclude <- c(
-  "Contig[All Fields]",
-  "scaffold[All Fields]",
-  "genome[All Fields]"
-)
-
-# or, for raw string searching:
-
-#raw_entrez_terms <- list(
-#  Nectriaceae_unclassified = 'Nectriaceae sp.[porgn:__txid1756110] AND host=C* NOT uncultured[All Fields]'
-#)
-
-max_acc_per_taxa <- 1000   # use "max" to retrieve all matching hits
-ncbi_api_key <- Sys.getenv("NCBI_API_KEY")
-my_lab_sequences <- "/path/to/my_lab_sequences.tsv" # put "" if you have no lab sequecnes to add
-literature_accessions <- "/path/to/literature_accessions.tsv" # put "" if you have no literature accesssions to flag
-
-# Save the exact options you used in your project folder
-save_project_config(
-  project_name = project_name,
-  taxa_of_interest = taxa_of_interest,
-  my_lab_sequences = my_lab_sequences,
-  organism_scope = organism_scope,
-  max_acc_per_taxa = max_acc_per_taxa
-)
-
-```
-
 <br>
 
-### 4) Collect metadata
+### 4) Collect data and metadata
 
-**Important:** This can be VERY time-intensive for large datasets.
+**Important:** This can be VERY time-intensive for large datasets (several hours to several days)
 
 **Tip:** For very large runs, consider testing your pipeline on a small subset first (e.g., max_acc_per_taxa = 50) to confirm that your search parameters behave as expected before scaling up.
-
-About NCBI search behavior:  standard NCBI searches are not perfectly constrained to the "organism" field. For example, if you search "Pandora[organism]", NCBI will return all accessions explictedly labeled as "Pandora" in the "organism" field, as well as any accessions that have "Pandora" located anywhere in the metadata (such as in the "notes" or "Title" field). It will also include any accession that was historically named "Pandora" as well, I believe.  This is frustrating, as it will slow down your search by including accessions you don't care about. I haven't found a foolproof way around this yet. I've tried a few workarounds (like constraining the search with "Pandora"[Organism:noexp]"), but this appears to still let a few unwanted accessions appear in the search. I've addressed this later on in the curation steps - there is a step that by default filters out any accession whose organism name doesn't match to your list of target taxa. As a result, you will probably have more accessions listed in your various intermediate files than you do in your final metadata file; this is normal and not a cause for concern.
-
-Both accession retrieval and metadata retrieval are checkpointed automatically. If the run is interrupted (computer restart, internet outage, R crash, etc.), rerunning the same command with resume = TRUE (the default) continues from the last completed checkpoint instead of starting over. 
-
-Large projects containing hundreds of thousands of accessions may run for several days, so checkpointing is strongly recommended.
 
 <br>
 
@@ -207,13 +208,20 @@ ncbi_data_fetch(
 )
 ```
 
-Resuming metadata collection (in case of metadata retreival interruption):
+<br>
 
-The ncbi_data_fetch() function runs both accession retrieval and metadata collection. If your metadata run is interrupted, you do not need to rerun everything. Instead, you can resume metadata collection directly:
+Resuming metadata collection (in case of metadata retreival interruption):
 
 ```R
 retrieve_ncbi_metadata(project_name, resume = TRUE)
 ```
+
+About NCBI search behavior:  standard NCBI searches are not perfectly constrained to the "organism" field. For example, if you search "Pandora[organism]", NCBI will return all accessions explictedly labeled as "Pandora" in the "organism" field, as well as any accessions that have "Pandora" located anywhere in the metadata (such as in the "notes" or "Title" field). It will also include any accession that was historically named "Pandora" as well, I believe.  This is frustrating, as it will slow down your search by including accessions you don't care about. I haven't found a foolproof way around this yet. I've tried a few workarounds (like constraining the search with "Pandora"[Organism:noexp]"), but this appears to still let a few unwanted accessions appear in the search. I've addressed this later on in the curation steps - there is a step that by default filters out any accession whose organism name doesn't match to your list of target taxa. As a result, you will probably have more accessions listed in your various intermediate files than you do in your final metadata file; this is normal and not a cause for concern.
+
+Both accession retrieval and metadata retrieval are checkpointed automatically. If the run is interrupted (computer restart, internet outage, R crashes, etc.), rerunning the same command with resume = TRUE (the default) continues from the last completed checkpoint instead of starting over. 
+
+Large projects containing hundreds of thousands of accessions may run for many hours or multiple days, so allowing checkpointing is strongly recommended.
+
 
 <br>
 
@@ -221,7 +229,19 @@ retrieve_ncbi_metadata(project_name, resume = TRUE)
 
 Now that you have your metadata, it's time to do some basic curation. 
 
-NOTE:  Public metadata is highly inconsistent and often incomplete. Its quality depends entirely on the original submitter. aRborist attempts to standardize common fields and naming patterns, but you should expect irregularities like missing values, inconsistent strain naming, or unusual formatting. Review your curated data before downstream analyses and keep these limitations in mind.
+**Important:**  Public metadata is highly inconsistent and often incomplete. Its quality depends entirely on the original submitter. aRborist attempts to standardize common fields and naming patterns, but you should expect irregularities like missing values, inconsistent strain naming, or unusual formatting. Review your curated data before downstream analyses and keep these limitations in mind.
+
+Running the basic curation:
+
+```R
+data_curate(project_name)
+```
+
+After this step completes, a new file will be created in your project directory:
+
+./metadata_files/all_accessions_pulled_metadata_<project_name>_curated.csv
+
+<br>
 
 These are the curation steps that are peformed:
 
@@ -229,8 +249,8 @@ These are the curation steps that are peformed:
    If you provided a file via my_lab_sequences, your custom sequences and metadata are merged into the NCBI metadata before any curation steps. This allows your data to be treated identically to public accessions throughout the pipeline.
 
 2) Assign a universal strain name
-   Each accession receives a unified strain identifier (strain.standard) drawn from the following metadata fields, in order of priority:
-specimen_voucher → strain → isolate → Accession. If none of these fields are available, the accession number is used.
+   Each accession receives a unified strain identifier (strain.standard) drawn from the following metadata fields, in order of decreasing priority:
+specimen_voucher → strain → isolate. If none of these fields are available, the accession number is used.
 
 1) Standardize strain names
    All spaces and special characters are removed to ensure compatibility with downstream analyses and FASTA headers. The standardized strain name is called "strain.standard".
@@ -244,22 +264,7 @@ specimen_voucher → strain → isolate → Accession. If none of these fields a
    By default, any accession whose "organism" name does not match your specified taxa_of_interest is removed. You can disable this with taxa_of_interest = NULL.
    
 4) Add strain/accession taxonomy
-   aRborist automatically extracts full fungal taxonomy for each accession from NCBI metadata category **GBSeq_taxonomy**. THe following columns are added: Strain.taxonomy, Strain.phylum, Strain.class, Strain.order, Strain.family, Strain.genus, Strain.species
-
-<br>
-
-Running the basic curation:
-
-Perform basic curation with taxon filtering (recommended):
-
-```R
-data_curate(project_name)
-```
-
-
-After this step completes, a new file will be created in your project directory:
-
-./metadata_files/all_accessions_pulled_metadata_<project_name>_curated.csv
+   aRborist automatically extracts the full taxonomy for each accession from NCBI metadata category **GBSeq_taxonomy**. The following columns are generated: Strain.taxonomy, Strain.phylum, Strain.class, Strain.order, Strain.family, Strain.genus, Strain.species
 
 
 <br>
@@ -267,7 +272,7 @@ After this step completes, a new file will be created in your project directory:
 
 ### End of basic aRborist pipeline
 
-At this point, you should have a massive metadata file with curated information. Hopefully, this is in a format that is useful to you! 
+At this point, you should have a large metadata csv file containing the curated information from each NCBI nucleotide accession. There's so much you can do with this data!
 
 I have several downstream pipelines that directly build off the output from these inital steps. These include:
 
@@ -277,9 +282,9 @@ I have several downstream pipelines that directly build off the output from thes
 
 2) Host assessment pipeline
 
-   Semi-automatically parses through massive amounts of public data to assign host percentage at different taxonomic levels.
+   Semi-automated pipeline which curates the accessions' host metadata and calculates host incidence across your dataset.
 
-I create these pipelines primarily for myself, making them as needed for different projects. I am always adding new offshoots of the aRborist pipeline, so this set of pipelines may expand in the future.
+I create these extra pipelines primarily for my own projects, making them as needed, so this set of aRborist pipelines may expand in the future.
 
 <br>
 <br>
@@ -301,17 +306,19 @@ If you have conda installed on your computer, you can easily install the softwar
 
 > conda install -c bioconda trimal mafft iqtree
 
-Or, you can manually install at their respective websites:  [TrimAl](https://vicfero.git)  [MAFFT](https://mafft.cbrc.jp/alignment/software/source.html) [IQ-TREE](https://iqtree.github.io/)
+Or, you can manually install at their respective websites: 
 
-Take note of the full paths of your downloaded software. 
+* [TrimAl](https://trimal.readthedocs.io/en/latest/installation.html)
+* [MAFFT](https://mafft.cbrc.jp/alignment/software/source.html)
+* [IQ-TREE](https://iqtree.github.io/)
 
-Open your .Renviron file:
+Take note of the full paths of your downloaded software. Then, open your .Renviron file:
 
 ```R
 usethis::edit_r_environ()
 ```
 
-Edit this file to include the lines:
+And edit this file to include these lines:
 
 ```R
 >MAFFT_PATH=<path_to_mafft_install>
@@ -375,7 +382,7 @@ flag_literature_accessions(
 
 You need to further curate your metadata so that the gene region information is useable. The goal is to assign a consistent set of region identifiers for each accession, even when the original records use messy or compound descriptions.
 
-(!) Before running this step, make sure you have run the basic curation step and have this file: ./metadata_files/all_accessions_pulled_metadata_<project_name>_curated.csv
+**(!)** Before running this step, make sure you have run the basic curation step and have this file: ./metadata_files/all_accessions_pulled_metadata_<project_name>_curated.csv
    
 This step uses a user-editable "replacement patterns" file (example_data/region_replacement_patterns.csv) to detect and standardize region names (e.g., ITS, TEF, RPB2, LSU, SSU). 
 
@@ -453,7 +460,7 @@ This step produces:
 3) region_selection_policy_<project>.<region_set>.txt : a record of the exact filtering settings used during selection.
 
 
-(!) Important note about duplicates:  Public metadata is messy, and it’s common to have more than one accession for the same strain and the same region (for example, two ITS sequences submitted at different times). In this step, the script keeps only one accession per strain × region combination. 
+**(!)** Important note about duplicates:  Public metadata is messy, and it’s common to have more than one accession for the same strain and the same region (for example, two ITS sequences submitted at different times). In this step, the script keeps only one accession per strain × region combination. 
 
 So if you are trying to include a particular accession, but you find that a duplicate entry or entires keeps being used in place of your desired accession, you can specify to remove those particular accessions with the "acc_to_exclude" option, like so:
 
@@ -505,7 +512,7 @@ You can control the sequences present in the downstream analyses by:
 * replacing accessions (edit accession)
 
 
-#### include_in_tree : Temporary inclusion/exclusion
+#### "include_in_tree" Temporary inclusion/exclusion
 
 Sometimes you may want to temporarily remove strains from a particular analysis without permanently deleting them from the attendance sheet.
 
@@ -695,47 +702,131 @@ Partitioned analysis: Chernomor, O., Von Haeseler, A. and Minh, B.Q., 2016. Terr
 <br>
 <br>
 
+---
+
 # aRborist Host Assessment Pipeline
 
-Taxonomic curation and summary of host associations for each species included in your metadata.
+The host assessment pipeline standardizes host metadata, assigns NCBI taxonomy to host terms, identifies terms that could not be resolved automatically, and allows those terms to be refined before generating host-association summaries.
 
-This host assessment pipeline takes your curated metadata from the basic arborist pipeline, cleans and standardizes it, looks up the host taxonomy via NCBI, and provides a helpful summary. This pipeline is optional and is fully independent of the phylogenetic pipeline. You can run either or both of these pipelines, in any order, after completing the basic metadata curation step of the basic arborist pipeline. 
+aRborist uses the local NCBI taxonomy database created during first-time setup. This allows large numbers of unique host terms to be resolved locally rather than repeatedly querying NCBI over the internet.
 
-All the output from this pipeline will be stored inside your project folder in a folder called "host_assessment".
+## Disclaimer and Important Considerations
+
+The host-association results should be interpreted with caution. The NCBI metadata is user-supplied and can vary in completeness, accuracy, terminology, and taxonomic resolution. NCBI records are also subject to strong sampling and research biases, with certain organisms or taxonomic groups being over-represented (agricultural, medical, or economically important organisms). In addition, multiple accessions may come from the same study, isolate, or sampling effort, so accession counts do NOT represent independent biological observations. Therefore, these results are best interpreted as patterns in available NCBI metadata rather than unbiased estimates of host range, host preference, or the frequency of associations in nature.
 
 <br> 
 
+## Setup and downloads
+
+The aRborist host assessment pipeline uses a local copy of the NCBI taxonomy database to assign taxonomy to host names. Rather than repeatedly querying NCBI over the internet for every host term, aRborist can search the taxonomy database locally. This is substantially faster for large datasets and also allows host names to be checked against NCBI scientific names, synonyms, and common names.
+
+This setup only needs to be completed once. The same local taxonomy database can then be reused across aRborist projects.
+
+### Download and process the NCBI taxonomy files
+
+Download and unzip the current new_taxdump.tar.gz archive from the NCBI taxonomy directory (https://ftp.ncbi.nlm.nih.gov/pub/taxonomy/new_taxdump/). You can easily do this via the terminal:
+
+```bash
+wget https://ftp.ncbi.nlm.nih.gov/pub/taxonomy/new_taxdump/new_taxdump.zip
+gunzip new_taxdump.zip
+```
+
+In R, use the provided aRborist script to build the aRborist taxonomy lookup files. Make sure to indicate the correct folder where the new_taxdump folder is stored.
+
+```R
+setup_ncbi_taxonomy_database(
+  taxonomy_dir = "~/Downloads/ncbi_taxonomy",
+  overwrite = FALSE
+)
+```
+
+This step converts the raw NCBI taxonomy files into local lookup tables that aRborist can load efficiently during host assessment. This includes:
+
+* a name lookup table, which maps NCBI names and synonyms to TaxIDs
+* a ranked taxonomy table, which stores the taxonomic lineage associated with each TaxID
+
+Because NCBI taxonomy changes over time, it is a good idea to periodically download a new taxdump.tar.gz and rebuild the local lookup files, particularly before beginning a major new analysis. Simply re-download the NCBI new_taxdump file and re-run setup_ncbi_taxonomy_database with overwrite=TRUE.
+
+
 ## 1) Initial host term extraction and taxonomy lookup
 
-This step will create a new column in your metadata (host.standardized) and use the NCBI taxonomy database to look up the full taxonomy for each unique term.
-
-At the end of the lookup process, you will be told how many host names failed the search. If by some miracle you have zero failed names, or if you don't care about using as much of the metadata as possible, you may proceed directly to step 3. 
+The initial pass extracts host metadata from the curated accession dataset and creates a standardized host term for each accession. Unique host terms are then matched against the local NCBI taxonomy database.
 
 ```R
 run_host_assessment_initial_pass(
-  project_name,
-  use_isolation_source = FALSE, 
-  overwrite_host_standardized = TRUE
+  project_name = project_name,
+  use_isolation_source = FALSE,
+  overwrite_host_standardized = TRUE,
+  use_shared_replacements = TRUE,
+  use_taxize_fallback = FALSE
 )
 ```
+
+During this step, aRborist:
+
+* preserves the original host metadata
+* creates a standardized host term in host.standardized
+* applies any previously curated host-term replacements
+* performs conservative cleanup of common metadata formatting problems
+* searches each unique standardized term against the provided "host_term_replacements" file
+* searches each unique standardized term against the local NCBI taxonomy database
+* retrieves the NCBI TaxID, scientific name, and taxonomic lineage for successfully resolved terms
+* records terms that could not be resolved or were ambiguous for later review
+
+aRborist includes a large collection of failed host terms encountered in my own analyses, along with the replacement terms I assigned during manual curation (`example_data/host_term_replacements.csv`). These replacements can save considerable time when the same messy metadata appear in new datasets. However, I still recommend reviewing the replacement table before using it, since some assignments required interpretation and you may not agree with every decision.
+
+At the end of the initial pass, aRborist reports how many unique host terms were successfully resolved and how many require further review.
 
 Explanation of options:
 
 `use_isolation_source` : If the "host" metadata field is empty for an accession, will instead use the entry for "isolation_source".
 
-Sometimes, when looking at metadata, it's really obvious that someone put down host infomation in the "isolation_source" category rather than the correct "host" category. I made this option in case I wanted to wring every bit of somewhat applicable information out of the metadata. Turning this option on will drastically increase the number of terms you need to search and edit, plus, chances are some of the isolation_source data truly is inappropriate to be considered as host data. Overall, I would recommend against using this option. 
+  Sometimes, when looking at metadata, it's really obvious that someone put down host infomation in the "isolation_source" category rather than the correct "host" category. I made this option in case I wanted to wring every bit of somewhat applicable information out of the metadata. Turning this option on will drastically increase the number of terms you need to search and edit, plus, chances are some of the isolation_source data truly is inappropriate to be considered as host data. In most cases, I recommend leaving use_isolation_source = FALSE.
 
 `overwrite_host_standardized` : if TRUE, will overwrite the host_standarized column in your metadata file. Turn this on if you want to start the host assessment pipeline from scratch and need to re-do this step.
 
+`use_shared_replacements` : If TRUE, applies previously curated host-term replacements stored in the shared replacement table (host_term_replacements.csv). This allows corrections identified in previous aRborist projects, such as misspellings or standardized taxonomic names, to be reused automatically. Set to FALSE if you do not want previously curated replacements applied.
+
+`use_taxize_fallback` : If TRUE, host terms that cannot be resolved using the local NCBI taxonomy database are given an additional lookup attempt using taxize. This can recover some terms missed by the local lookup, but requires online queries and may substantially increase runtime for large numbers of unresolved terms. Set to FALSE to rely exclusively on the local NCBI taxonomy database.
+
 <br> 
 
-## 2) Curation and re-attempt to lookup host terms
+## 2) Review and refine failed host terms
 
-You probably had at least a few terms fail the NCBI taxonomy lookup. Metadata will often contain messy, misspelled, or ambiguous terms - this does not play well with automated searching. *If* you want to rescue as much metadata as possible, you'll need to do some manual editing.
+Real-world NCBI host metadata is *messy*. Host fields frequently contain misspellings, outdated taxonomic names, descriptive text, collection notes, host names embedded within longer phrases, or completely nonsensical information.
 
-The previous step has created a file listing all the failed terms:  ./host_assessment/failed_host_terms_<project>.csv
+Terms that could not be confidently assigned during the initial pass are written to:  ./host_assessment/failed_host_terms_<project>.csv
 
-It contains two columns: "original_term" and "replacement_term". Open the file and change the values in the "replacement_term" column to a more approprate term. If there is a term you know you don't care about or want to skip (e.g. "soil", "culture from", nonsense) leave it as "NA". 
+The failed-term file preserves unresolved terms so they can be reviewed without repeating the entire initial host assessment. aRborist also tracks how many accessions are associated with each failed term, which can be useful for prioritizing terms that affect large portions of the dataset.
+
+### 2a: Automatic processing of failed host terms** 
+
+Before manually editing every failed term, aRborist can attempt to recover recognizable taxonomic names embedded within messy host metadata. 
+
+For example, a term such as `on dead branches of Camellia sinensis` may contain a valid NCBI taxonomic name even though the complete metadata string cannot be used directly as a taxonomy search.
+
+The failed-term processing functions attempt to identify these embedded names and validate them against the local NCBI taxonomy database. As with the initial cleanup, automatic replacements are only accepted when the proposed name resolves **unambiguously** to a single NCBI TaxID.
+
+```R
+suggest_embedded_host_replacements(
+  project_name = project_name,
+  apply_suggestions = TRUE
+)
+```
+
+Ambiguous or uncertain terms will be recorded. This includes duplicate taxonomy names, for example:
+
+* *Chloris* (does this refer to the bird or the grass?)
+* *Pandora* (does this refer to the bivalve or the fungus?)
+* *Rattus* (does this refer to the Rat genus or the Black Rat species?)
+
+<br>
+
+### 2b: Manual curation of failed host terms
+
+The failed-host file contains the original failed term and a replacement_term field. For unresolved terms, edit replacement_term to contain an appropriate taxonomic name that can be searched against the NCBI taxonomy database.
+
+Some notes:  I recommend being as conservative as possible when changing terms. The goal is to recover information that is reasonably supported by the original metadata, not to infer a more specific host than the record provides.
 
 Some examples:
 
@@ -746,8 +837,9 @@ Some examples:
 * "lepidopteran larva" -> "Lepidoptera"
 
 
-Some notes:  I recommend being as conservative as possible when changing terms. Double check commonly mispelled names, or if an organism has more than one name. Also, if a name is not in the NCBI taxonomy database, it will not return the taxonomy (I have run into this problem a lot with esoteric plant taxa).
+If a name is not in the NCBI taxonomy database, it will not return the taxonomy and will be considered a failed term (I have run into this problem a lot with esoteric plant species).
 
+If a host term is unusable or does not contain enough information to make a defensible assignment, leave its replacement as NA.
 
 Once you have made the necessary edits, save the file. Then, run the following to re-attempt the taxonomy lookup with just the failed terms:
 
@@ -761,7 +853,7 @@ You can re-run the refinement step as many times as needed. Once you feel good a
 
 ## 3) Summarize host data
 
-Now it's time to add your host taxonomy data back to your master datasheet (./metadata_files/all_accessions_pulled_metadata_<project_name>_curated.csv) and summarize the info so it's in a useable form. 
+The final step joins the resolved host taxonomy back to the curated accession metadata and summarizes host associations at a selected taxonomic rank.
 
 ```R
 run_host_assessment_summary(
@@ -779,10 +871,17 @@ Many accessions only have high-level host information available, so it is best t
 
 `keep_NAs` : control how missing or unusable host information affects percentage calculations.
 
-If TRUE, aRborist will summarize host usage only among accessions with known host information. If FALSE, aRborist will incorporate NAs into the calculations; percentages become more conservative and may be strongly diluted by missing data. Not including the NAs will better reflect the overall data completeness, but will probably weaken the ecological signal because unknown hosts will probably dominate the totals.
+If TRUE, aRborist will summarize host usage only among accessions with known host information. If FALSE, aRborist will incorporate NAs into the calculations; percentages become more conservative and may be strongly diluted by missing data. Not including the NAs will better reflect the overall data completeness, but will probably weaken the ecological signal because "unknown" hosts will probably dominate the totals.
 
 <br>
 
-With this step complete, the host assessment pipeline is done. You will have a final report of the host assessment of your metadata here: ./host_assessment/host_usage_by_<taxon_level>_<project_name>.csv
+With this step complete, the host assessment pipeline is done. The host taxonomy assignments are incorporated into the curated accession metadata, allowing the original accession information and resolved host taxonomy to be analyzed together.
 
-This file has one row for each species in your dataset, with the host breakdown at the specified taxon level. The "top_host_category" column reports the host taxa with the highest percetage per target speices. The "host_profile" column summarizes the host breakdown. 
+You will have a final report of the host assessment of your metadata here: ./host_assessment/host_usage_by_<taxon_level>_<project_name>.csv
+
+This table summarizes host associations for each organism in the dataset at the selected host taxonomic rank.
+
+The output includes the number of accessions represented by each host category, percentages of host associations, the most frequently represented host category, and a compact host profile summarizing the host distribution.
+
+The summary can then be used for downstream filtering, plotting, and comparisons among taxa.
+

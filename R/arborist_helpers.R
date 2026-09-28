@@ -24,6 +24,612 @@ load_required_packages <- function() {
   invisible(lapply(required_packages, library, character.only = TRUE))
 }
 
+
+# ============================================================
+# Build local NCBI taxonomy databases for host assessment
+# ============================================================
+
+setup_ncbi_taxonomy_database <- function(
+    taxonomy_dir,
+    output_dir = NULL,
+    overwrite = FALSE
+) {
+  
+  # ==========================================================
+  # Check dependencies
+  # ==========================================================
+  
+  if (!requireNamespace("data.table", quietly = TRUE)) {
+    stop(
+      "Package 'data.table' is required to build the local ",
+      "NCBI taxonomy database.\n",
+      "Install it with:\n",
+      "  install.packages(\"data.table\")"
+    )
+  }
+  
+  
+  # ==========================================================
+  # Validate input directory
+  # ==========================================================
+  
+  taxonomy_dir <- normalizePath(
+    taxonomy_dir,
+    mustWork = FALSE
+  )
+  
+  if (!dir.exists(taxonomy_dir)) {
+    stop(
+      "NCBI taxonomy directory does not exist:\n  ",
+      taxonomy_dir
+    )
+  }
+  
+  
+  # ==========================================================
+  # Determine output directory
+  # ==========================================================
+  
+  if (is.null(output_dir)) {
+    
+    if (exists(
+      ".host_example_data_dir",
+      mode = "function"
+    )) {
+      
+      output_dir <- .host_example_data_dir()
+      
+    } else {
+      
+      arborist_root <- get0(
+        "arborist_repo",
+        envir = .GlobalEnv,
+        ifnotfound = normalizePath(
+          "~/github/aRborist",
+          mustWork = FALSE
+        )
+      )
+      
+      output_dir <- file.path(
+        arborist_root,
+        "example_data"
+      )
+    }
+  }
+  
+  output_dir <- normalizePath(
+    output_dir,
+    mustWork = FALSE
+  )
+  
+  if (!dir.exists(output_dir)) {
+    dir.create(
+      output_dir,
+      recursive = TRUE
+    )
+  }
+  
+  
+  # ==========================================================
+  # Locate required NCBI taxonomy files
+  # ==========================================================
+  
+  find_taxonomy_file <- function(filename) {
+    
+    hits <- list.files(
+      taxonomy_dir,
+      pattern = paste0(
+        "^",
+        gsub(
+          "\\.",
+          "\\\\.",
+          filename
+        ),
+        "$"
+      ),
+      recursive = TRUE,
+      full.names = TRUE
+    )
+    
+    if (length(hits) == 0) {
+      stop(
+        "Required NCBI taxonomy file not found:\n  ",
+        filename,
+        "\n\nSearched within:\n  ",
+        taxonomy_dir
+      )
+    }
+    
+    if (length(hits) > 1) {
+      warning(
+        "Multiple copies of ",
+        filename,
+        " were found. Using:\n  ",
+        hits[[1]]
+      )
+    }
+    
+    hits[[1]]
+  }
+  
+  
+  names_file <- find_taxonomy_file(
+    "names.dmp"
+  )
+  
+  nodes_file <- find_taxonomy_file(
+    "nodes.dmp"
+  )
+  
+  rankedlineage_file <- find_taxonomy_file(
+    "rankedlineage.dmp"
+  )
+  
+  
+  message("")
+  message("NCBI taxonomy source files:")
+  message("  names.dmp:         ", names_file)
+  message("  nodes.dmp:         ", nodes_file)
+  message("  rankedlineage.dmp: ", rankedlineage_file)
+  
+  
+  # ==========================================================
+  # Define output files
+  # ==========================================================
+  
+  name_lookup_output <- file.path(
+    output_dir,
+    "ncbi_name_lookup.rds"
+  )
+  
+  ranked_taxonomy_output <- file.path(
+    output_dir,
+    "ncbi_ranked_taxonomy.rds"
+  )
+  
+  
+  existing_outputs <- c(
+    name_lookup_output,
+    ranked_taxonomy_output
+  )
+  
+  if (
+    any(file.exists(existing_outputs)) &&
+    !overwrite
+  ) {
+    
+    existing_outputs <- existing_outputs[
+      file.exists(existing_outputs)
+    ]
+    
+    stop(
+      "One or more local NCBI taxonomy database files already exist:\n  ",
+      paste(
+        existing_outputs,
+        collapse = "\n  "
+      ),
+      "\n\nUse overwrite = TRUE to rebuild them."
+    )
+  }
+  
+  
+# Helper for cleaning NCBI dump fields
+clean_ncbi_field <- function(x) {
+    
+    x <- as.character(x)
+    
+    # Remove whitespace introduced by the NCBI .dmp format
+    x <- trimws(x)
+    
+    # Treat empty values as NA
+    x[
+      is.na(x) |
+        x == ""
+    ] <- NA_character_
+    
+    x
+  }
+  
+  # ==========================================================
+  # Build NCBI name lookup database
+  #
+  # names.dmp fields:
+  #
+  # TaxID | name | unique_name | name_class |
+  #
+  # Keep ALL name classes. This allows aRborist to recognize
+  # scientific names, synonyms, common names, misspellings,
+  # equivalent names, etc. Ambiguous names are handled later
+  # by the host-assessment pipeline.
+  # ==========================================================
+  
+  message("")
+  message("Reading NCBI names.dmp...")
+  
+  ncbi_names <- data.table::fread(
+    names_file,
+    sep = "|",
+    header = FALSE,
+    quote = "",
+    fill = TRUE,
+    data.table = FALSE,
+    showProgress = TRUE
+  )
+  
+  if (ncol(ncbi_names) < 4) {
+    stop(
+      "names.dmp did not contain the expected four fields."
+    )
+  }
+  
+  ncbi_names <- ncbi_names[
+    ,
+    1:4,
+    drop = FALSE
+  ]
+  
+  names(ncbi_names) <- c(
+    "TaxID",
+    "name",
+    "unique_name",
+    "name_class"
+  )
+  
+  ncbi_names$TaxID <- clean_ncbi_field(
+    ncbi_names$TaxID
+  )
+  
+  ncbi_names$name <- clean_ncbi_field(
+    ncbi_names$name
+  )
+  
+  ncbi_names$unique_name <- clean_ncbi_field(
+    ncbi_names$unique_name
+  )
+  
+  ncbi_names$name_class <- clean_ncbi_field(
+    ncbi_names$name_class
+  )
+  
+  
+  # ----------------------------------------------------------
+  # Normalized version used for fast host-name matching
+  # ----------------------------------------------------------
+  
+  if (exists(
+    ".host_normalize_name",
+    mode = "function"
+  )) {
+    
+    ncbi_names$normalized_name <-
+      .host_normalize_name(
+        ncbi_names$name
+      )
+    
+  } else {
+    
+    normalized_name <- trimws(
+      as.character(
+        ncbi_names$name
+      )
+    )
+    
+    normalized_name <- gsub(
+      "[[:space:]]+",
+      " ",
+      normalized_name
+    )
+    
+    ncbi_names$normalized_name <-
+      tolower(
+        normalized_name
+      )
+  }
+  
+  
+  # Remove malformed rows, but retain all legitimate
+  # NCBI name classes.
+  
+  ncbi_names <- ncbi_names[
+    !is.na(ncbi_names$TaxID) &
+      !is.na(ncbi_names$name) &
+      !is.na(ncbi_names$name_class) &
+      !is.na(ncbi_names$normalized_name) &
+      nzchar(ncbi_names$normalized_name),
+    ,
+    drop = FALSE
+  ]
+  
+  
+  ncbi_names <- unique(
+    ncbi_names
+  )
+  
+  
+  message(
+    "NCBI name records retained: ",
+    format(
+      nrow(ncbi_names),
+      big.mark = ","
+    )
+  )
+  
+  
+  # ==========================================================
+  # Read rankedlineage.dmp
+  #
+  # rankedlineage.dmp fields:
+  #
+  # TaxID
+  # Scientific.name
+  # Species
+  # Genus
+  # Family
+  # Order
+  # Class
+  # Phylum
+  # Kingdom
+  # Superkingdom
+  # ==========================================================
+  
+  message("")
+  message("Reading NCBI rankedlineage.dmp...")
+  
+  ranked_taxonomy <- data.table::fread(
+    rankedlineage_file,
+    sep = "|",
+    header = FALSE,
+    quote = "",
+    fill = TRUE,
+    data.table = FALSE,
+    showProgress = TRUE
+  )
+  
+  if (ncol(ranked_taxonomy) < 10) {
+    stop(
+      "rankedlineage.dmp did not contain the expected ",
+      "ten taxonomy fields."
+    )
+  }
+  
+  ranked_taxonomy <- ranked_taxonomy[
+    ,
+    1:10,
+    drop = FALSE
+  ]
+  
+  names(ranked_taxonomy) <- c(
+    "TaxID",
+    "Scientific.name",
+    "Species",
+    "Genus",
+    "Family",
+    "Order",
+    "Class",
+    "Phylum",
+    "Kingdom",
+    "Superkingdom"
+  )
+  
+  
+  for (column_name in names(ranked_taxonomy)) {
+    
+    ranked_taxonomy[[column_name]] <-
+      clean_ncbi_field(
+        ranked_taxonomy[[column_name]]
+      )
+  }
+  
+  
+  # ==========================================================
+  # Read nodes.dmp
+  #
+  # I use nodes.dmp to retain the ACTUAL rank of each TaxID.
+  # rankedlineage.dmp provides the standard lineage columns,
+  # but does not itself tell us whether the queried TaxID is
+  # a species, subspecies, strain, genus, etc.
+  # ==========================================================
+  
+  message("")
+  message("Reading NCBI nodes.dmp...")
+  
+  ncbi_nodes <- data.table::fread(
+    nodes_file,
+    sep = "|",
+    header = FALSE,
+    quote = "",
+    fill = TRUE,
+    data.table = FALSE,
+    showProgress = TRUE,
+    select = 1:3
+  )
+  
+  if (ncol(ncbi_nodes) < 3) {
+    stop(
+      "nodes.dmp did not contain the expected first ",
+      "three fields."
+    )
+  }
+  
+  names(ncbi_nodes) <- c(
+    "TaxID",
+    "parent_TaxID",
+    "taxon_rank"
+  )
+  
+  ncbi_nodes$TaxID <- clean_ncbi_field(
+    ncbi_nodes$TaxID
+  )
+  
+  ncbi_nodes$parent_TaxID <- clean_ncbi_field(
+    ncbi_nodes$parent_TaxID
+  )
+  
+  ncbi_nodes$taxon_rank <- clean_ncbi_field(
+    ncbi_nodes$taxon_rank
+  )
+  
+  
+  # Only TaxID and rank are required in the final lookup.
+  
+  rank_lookup <- ncbi_nodes[
+    ,
+    c(
+      "TaxID",
+      "taxon_rank"
+    ),
+    drop = FALSE
+  ]
+  
+  
+  rank_lookup <- rank_lookup[
+    !duplicated(rank_lookup$TaxID),
+    ,
+    drop = FALSE
+  ]
+  
+
+  # Add actual NCBI rank to ranked taxonomy
+  message("")
+  message("Adding NCBI taxon ranks...")
+  
+  ranked_taxonomy <- merge(
+    ranked_taxonomy,
+    rank_lookup,
+    by = "TaxID",
+    all.x = TRUE,
+    sort = FALSE
+  )
+  
+  # Final cleanup
+  ranked_taxonomy <- ranked_taxonomy[
+    !is.na(ranked_taxonomy$TaxID) &
+      !is.na(ranked_taxonomy$Scientific.name),
+    ,
+    drop = FALSE
+  ]
+  
+  
+  ranked_taxonomy <- ranked_taxonomy[
+    !duplicated(ranked_taxonomy$TaxID),
+    ,
+    drop = FALSE
+  ]
+  
+  
+  message(
+    "NCBI ranked taxonomy records retained: ",
+    format(
+      nrow(ranked_taxonomy),
+      big.mark = ","
+    )
+  )
+  
+  # Save databases
+  message("")
+  message("Saving local NCBI taxonomy databases...")
+  
+  saveRDS(
+    ncbi_names,
+    name_lookup_output
+  )
+  
+  saveRDS(
+    ranked_taxonomy,
+    ranked_taxonomy_output
+  )
+  
+  
+  # Validate output against aRborist readers
+  message("")
+  message("Validating local taxonomy databases...")
+  
+  if (exists(
+    ".read_ncbi_name_lookup",
+    mode = "function"
+  )) {
+    
+    name_test <- .read_ncbi_name_lookup(
+      name_lookup_output
+    )
+    
+    if (nrow(name_test) == 0) {
+      stop(
+        "The NCBI name lookup database was created ",
+        "but contains zero records."
+      )
+    }
+  }
+  
+  if (exists(
+    ".read_ncbi_ranked_taxonomy",
+    mode = "function"
+  )) {
+    
+    taxonomy_test <- .read_ncbi_ranked_taxonomy(
+      ranked_taxonomy_output
+    )
+    
+    if (nrow(taxonomy_test) == 0) {
+      stop(
+        "The NCBI ranked taxonomy database was created ",
+        "but contains zero records."
+      )
+    }
+  }
+
+  # Report creation
+  message("")
+  message("============================================================")
+  message("LOCAL NCBI TAXONOMY DATABASE SETUP COMPLETE")
+  message("============================================================")
+  message("")
+  message(
+    "Name lookup database:\n  ",
+    name_lookup_output
+  )
+  message(
+    "  Records: ",
+    format(
+      nrow(ncbi_names),
+      big.mark = ","
+    )
+  )
+  message("")
+  message(
+    "Ranked taxonomy database:\n  ",
+    ranked_taxonomy_output
+  )
+  message(
+    "  Records: ",
+    format(
+      nrow(ranked_taxonomy),
+      big.mark = ","
+    )
+  )
+  message("")
+  message(
+    "The local NCBI taxonomy databases are ready for ",
+    "aRborist host assessment."
+  )
+  
+  invisible(
+    list(
+      name_lookup_file =
+        name_lookup_output,
+      
+      ranked_taxonomy_file =
+        ranked_taxonomy_output,
+      
+      name_records =
+        nrow(ncbi_names),
+      
+      taxonomy_records =
+        nrow(ranked_taxonomy)
+    )
+  )
+}
+
 # region sorting
 # makes sure there is a consistent, sorted set of regions at each step
 sort_regions <- function(regions_to_include) {
@@ -52,6 +658,86 @@ default_search_exclude <- c(
   "mitochondrion[filter]"
 )
 
+# ============================================================
+# NCBI database selection
+# ============================================================
+
+default_ncbi_database <- "nucleotide"
+
+normalize_ncbi_database <- function(
+    ncbi_database = default_ncbi_database
+) {
+  
+  if (
+    is.null(ncbi_database) ||
+    length(ncbi_database) == 0 ||
+    is.na(ncbi_database[1])
+  ) {
+    ncbi_database <- default_ncbi_database
+  }
+  
+  x <- tolower(
+    trimws(
+      as.character(ncbi_database[1])
+    )
+  )
+  
+  if (x %in% c("nucleotide", "nuccore")) {
+    return("nucleotide")
+  }
+  
+  if (x %in% c(
+    "biosample",
+    "bio_sample",
+    "bio-sample"
+  )) {
+    return("biosample")
+  }
+  
+  stop(
+    "Unsupported NCBI database: ",
+    ncbi_database,
+    "\nCurrently supported options are:",
+    "\n  nucleotide",
+    "\n  biosample"
+  )
+}
+
+
+get_entrez_database_name <- function(
+    ncbi_database = default_ncbi_database
+) {
+  
+  ncbi_database <- normalize_ncbi_database(
+    ncbi_database
+  )
+  
+  switch(
+    ncbi_database,
+    nucleotide = "nuccore",
+    biosample = "biosample"
+  )
+}
+
+
+# Nucleotide defaults remain unchanged
+default_search_include <- c(
+  "biomol_genomic[PROP]",
+  "is_nuccore[filter]",
+  "(00000000100[SLEN] : 00000005000[SLEN])"
+)
+
+default_search_exclude <- c(
+  "mitochondrion[filter]"
+)
+
+
+# BioSample has completely different searchable properties,
+# so do NOT inherit the Nucleotide filters by default.
+default_biosample_search_include <- character(0)
+default_biosample_search_exclude <- character(0)
+
+
 # Initialize .GlobalEnv overrides if they don't exist
 if (!exists("organism_scope", .GlobalEnv) ||
     is.null(get("organism_scope", .GlobalEnv)) ||
@@ -70,49 +756,173 @@ if (!exists("search_exclude", .GlobalEnv) ||
 }
 
 # making full search term for entrez
-compose_entrez_term <- function(taxon,
-                                organism_scope  = NULL,
-                                include_filters = NULL,
-                                exclude_filters = NULL) {
-  # 1) Resolve arguments in priority:
-  #    explicit arg > .GlobalEnv override > package default
+compose_entrez_term <- function(
+    taxon,
+    organism_scope = NULL,
+    include_filters = NULL,
+    exclude_filters = NULL,
+    ncbi_database = get0(
+      "ncbi_database",
+      envir = .GlobalEnv,
+      ifnotfound = default_ncbi_database
+    )
+) {
+  
+  ncbi_database <- normalize_ncbi_database(
+    ncbi_database
+  )
+  
+  # ============================================================
+  # 1. Resolve organism scope
+  # ============================================================
+  
   if (is.null(organism_scope)) {
-    organism_scope <- get0("organism_scope", envir = .GlobalEnv,
-                           ifnotfound = default_organism_scope)
+    
+    organism_scope <- get0(
+      "organism_scope",
+      envir = .GlobalEnv,
+      ifnotfound = default_organism_scope
+    )
   }
+  
+  
+  # ============================================================
+  # 2. Resolve database-specific include/exclude defaults
+  # ============================================================
+  
   if (is.null(include_filters)) {
-    include_filters <- get0("search_include", envir = .GlobalEnv,
-                            ifnotfound = default_search_include)
+    
+    if (ncbi_database == "nucleotide") {
+      
+      include_filters <- get0(
+        "search_include",
+        envir = .GlobalEnv,
+        ifnotfound = default_search_include
+      )
+      
+    } else {
+      
+      include_filters <- get0(
+        "biosample_search_include",
+        envir = .GlobalEnv,
+        ifnotfound = default_biosample_search_include
+      )
+    }
   }
+  
+  
   if (is.null(exclude_filters)) {
-    exclude_filters <- get0("search_exclude", envir = .GlobalEnv,
-                            ifnotfound = default_search_exclude)
+    
+    if (ncbi_database == "nucleotide") {
+      
+      exclude_filters <- get0(
+        "search_exclude",
+        envir = .GlobalEnv,
+        ifnotfound = default_search_exclude
+      )
+      
+    } else {
+      
+      exclude_filters <- get0(
+        "biosample_search_exclude",
+        envir = .GlobalEnv,
+        ifnotfound = default_biosample_search_exclude
+      )
+    }
   }
   
-  # 2) Base organism term
-  q <- sprintf('"%s"[Organism]', taxon)
   
-  # 3) Add organism_scope (e.g. txid4751[Organism:exp])
-  if (!is.null(organism_scope) && nzchar(organism_scope)) {
-    q <- paste(q, organism_scope, sep = " AND ")
+  # ============================================================
+  # 3. Base organism term
+  # ============================================================
+  
+  q <- sprintf(
+    '"%s"[Organism]',
+    taxon
+  )
+  
+  
+  # ============================================================
+  # 4. Add organism scope
+  # ============================================================
+  
+  if (
+    !is.null(organism_scope) &&
+    length(organism_scope) > 0 &&
+    !is.na(organism_scope[1]) &&
+    nzchar(organism_scope[1])
+  ) {
+    
+    q <- paste(
+      q,
+      organism_scope,
+      sep = " AND "
+    )
   }
   
-  # 4) Add positive filters with AND
-  include_filters <- include_filters[nzchar(include_filters)]
+  
+  # ============================================================
+  # 5. Positive filters
+  # ============================================================
+  
+  include_filters <- as.character(
+    include_filters
+  )
+  
+  include_filters <- include_filters[
+    !is.na(include_filters) &
+      nzchar(include_filters)
+  ]
+  
   if (length(include_filters) > 0) {
-    include_str <- paste(include_filters, collapse = " AND ")
-    q <- paste(q, include_str, sep = " AND ")
+    
+    include_str <- paste(
+      include_filters,
+      collapse = " AND "
+    )
+    
+    q <- paste(
+      q,
+      include_str,
+      sep = " AND "
+    )
   }
   
-  # 5) Add negative filters with NOT (no leading AND)
-  exclude_filters <- exclude_filters[nzchar(exclude_filters)]
+  
+  # ============================================================
+  # 6. Negative filters
+  # ============================================================
+  
+  exclude_filters <- as.character(
+    exclude_filters
+  )
+  
+  exclude_filters <- exclude_filters[
+    !is.na(exclude_filters) &
+      nzchar(exclude_filters)
+  ]
+  
   if (length(exclude_filters) > 0) {
-    not_str <- paste(paste("NOT", exclude_filters), collapse = " ")
-    q <- paste(q, not_str)
+    
+    not_str <- paste(
+      paste(
+        "NOT",
+        exclude_filters
+      ),
+      collapse = " "
+    )
+    
+    q <- paste(
+      q,
+      not_str
+    )
   }
+  
   
   q
 }
+
+
 
 # default metadata categories to keep in search
 if (!exists("metadata_categories_keep", .GlobalEnv)) {
@@ -135,15 +945,163 @@ setup_project_structure <- function(project_dir,
   setwd(project_dir)
 }
 
+
+configure_entrez_key <- function(quiet = FALSE) {
+  
+  key <- ""
+  
+  if (exists("ncbi_api_key", envir = .GlobalEnv, inherits = FALSE)) {
+    key <- get("ncbi_api_key", envir = .GlobalEnv)
+  } else if (exists("api_key", envir = .GlobalEnv, inherits = FALSE)) {
+    key <- get("api_key", envir = .GlobalEnv)
+  }
+  
+  if (is.null(key) || length(key) == 0 || is.na(key[1])) {
+    key <- ""
+  } else {
+    key <- trimws(as.character(key[1]))
+  }
+  
+  if (!nzchar(key)) {
+    key <- trimws(Sys.getenv("NCBI_API_KEY", unset = ""))
+  }
+  
+  if (!nzchar(key)) {
+    key <- trimws(Sys.getenv("ENTREZ_KEY", unset = ""))
+  }
+  
+  if (nzchar(key)) {
+    rentrez::set_entrez_key(key)
+    
+    if (!quiet) {
+      message("NCBI API key configured for rentrez.")
+    }
+    
+    return(invisible(TRUE))
+  }
+  
+  if (!quiet) {
+    message("No NCBI API key found; using the slower no-key request rate.")
+  }
+  
+  invisible(FALSE)
+}
+
 # Sleep helper (uses ncbi_api_key from global env)
 # this is not using the "10 requests/sec with API, 3 requests/sec without" timing because I noticed the requests were being bunched up and sent in groups, resulting in a noticable percentage of my requests getting denied. 
 # you can mess with the timings if you want, but watch out for denied requests
+# Find and configure an NCBI API key.
+#
+# Priority:
+#   1. Global ncbi_api_key object
+#   2. Global api_key object
+#   3. NCBI_API_KEY environment variable
+#   4. ENTREZ_KEY environment variable
 get_sleep_duration <- function() {
-  if (!is.null(ncbi_api_key) && nzchar(ncbi_api_key)) 0.2 else 0.5
+  
+  key_present <- configure_entrez_key(quiet = TRUE)
+  
+  if (key_present) {
+    0.2
+  } else {
+    0.5
+  }
 }
-if (exists("ncbi_api_key") && !is.null(ncbi_api_key) && nzchar(ncbi_api_key)) {
-  rentrez::set_entrez_key(ncbi_api_key)
+
+# a probably not very accurate countdown timer when downloading metadata
+format_duration <- function(seconds) {
+  
+  if (is.na(seconds) || !is.finite(seconds)) {
+    return("unknown")
+  }
+  
+  seconds <- max(0, round(seconds))
+  
+  days <- seconds %/% 86400
+  hours <- (seconds %% 86400) %/% 3600
+  minutes <- (seconds %% 3600) %/% 60
+  secs <- seconds %% 60
+  
+  parts <- character(0)
+  
+  if (days > 0) {
+    parts <- c(parts, paste0(days, "d"))
+  }
+  
+  if (hours > 0 || days > 0) {
+    parts <- c(parts, paste0(hours, "h"))
+  }
+  
+  if (minutes > 0 || hours > 0 || days > 0) {
+    parts <- c(parts, paste0(minutes, "m"))
+  }
+  
+  if (length(parts) == 0) {
+    parts <- paste0(secs, "s")
+  }
+  
+  paste(parts, collapse = " ")
 }
+
+format_progress <- function(
+    current,
+    total,
+    start_time,
+    min_items_for_eta = 5
+) {
+  
+  elapsed_seconds <- as.numeric(
+    difftime(
+      Sys.time(),
+      start_time,
+      units = "secs"
+    )
+  )
+  
+  percent_complete <- if (total > 0) {
+    current / total * 100
+  } else {
+    0
+  }
+  
+  if (
+    current >= min_items_for_eta &&
+    current > 0 &&
+    total > current
+  ) {
+    
+    average_seconds_per_item <- elapsed_seconds / current
+    
+    remaining_seconds <- average_seconds_per_item *
+      (total - current)
+    
+    remaining_text <- format_duration(
+      remaining_seconds
+    )
+    
+  } else if (current >= total && total > 0) {
+    
+    remaining_text <- "0s"
+    
+  } else {
+    
+    remaining_text <- "calculating"
+  }
+  
+  paste0(
+    current,
+    " / ",
+    total,
+    " (",
+    sprintf("%.1f", percent_complete),
+    "%)",
+    " | elapsed: ",
+    format_duration(elapsed_seconds),
+    " | remaining: ",
+    remaining_text
+  )
+}
+
 
 # Save the run options for this project so it's reproducible later
 # still need to implement this in a meaningful way
@@ -215,182 +1173,2488 @@ clean_taxon_name <- function(x) {
   x
 }
 
+
+.biosample_esummary_to_accessions <- function(
+    summaries,
+    search_group
+) {
+  
+  if (
+    is.null(summaries) ||
+    length(summaries) == 0
+  ) {
+    
+    return(
+      data.frame(
+        Accession = character(0),
+        EntrezUID = character(0),
+        search_group = character(0),
+        ncbi_database = character(0),
+        stringsAsFactors = FALSE
+      )
+    )
+  }
+  
+  
+  get_summary_value <- function(
+    x,
+    field
+  ) {
+    
+    nms <- names(x)
+    
+    if (
+      is.null(nms) ||
+      length(nms) == 0
+    ) {
+      return(NA_character_)
+    }
+    
+    hit <- which(
+      tolower(nms) ==
+        tolower(field)
+    )
+    
+    if (length(hit) == 0) {
+      return(NA_character_)
+    }
+    
+    value <- x[[hit[1]]]
+    
+    if (
+      is.null(value) ||
+      length(value) == 0
+    ) {
+      return(NA_character_)
+    }
+    
+    as.character(value[1])
+  }
+  
+  
+  summary_names <- names(
+    summaries
+  )
+  
+  
+  rows <- lapply(
+    seq_along(summaries),
+    function(i) {
+      
+      this_summary <- summaries[[i]]
+      
+      accession <- get_summary_value(
+        this_summary,
+        "accession"
+      )
+      
+      uid <- get_summary_value(
+        this_summary,
+        "uid"
+      )
+      
+      if (
+        (is.na(uid) || !nzchar(uid)) &&
+        !is.null(summary_names) &&
+        length(summary_names) >= i
+      ) {
+        uid <- summary_names[i]
+      }
+      
+      data.frame(
+        Accession = accession,
+        EntrezUID = uid,
+        search_group = search_group,
+        ncbi_database = "biosample",
+        stringsAsFactors = FALSE
+      )
+    }
+  )
+  
+  
+  out <- dplyr::bind_rows(
+    rows
+  )
+  
+  
+  out <- out[
+    !is.na(out$Accession) &
+      nzchar(out$Accession),
+    ,
+    drop = FALSE
+  ]
+  
+  
+  out <- dplyr::distinct(
+    out,
+    Accession,
+    .keep_all = TRUE
+  )
+  
+  
+  out
+}
+
+.write_accession_checkpoint <- function(
+    x,
+    checkpoint_file
+) {
+  
+  checkpoint_dir <- dirname(
+    checkpoint_file
+  )
+  
+  
+  if (!dir.exists(checkpoint_dir)) {
+    dir.create(
+      checkpoint_dir,
+      recursive = TRUE
+    )
+  }
+  
+  
+  temp_file <- tempfile(
+    pattern = "accession_checkpoint_",
+    tmpdir = checkpoint_dir,
+    fileext = ".csv"
+  )
+  
+  
+  write.csv(
+    x,
+    temp_file,
+    row.names = FALSE,
+    quote = FALSE
+  )
+  
+  
+  renamed <- file.rename(
+    temp_file,
+    checkpoint_file
+  )
+  
+  
+  if (!renamed) {
+    
+    copied <- file.copy(
+      temp_file,
+      checkpoint_file,
+      overwrite = TRUE
+    )
+    
+    
+    unlink(
+      temp_file
+    )
+    
+    
+    if (!copied) {
+      
+      stop(
+        "Could not safely write accession checkpoint: ",
+        checkpoint_file
+      )
+    }
+  }
+  
+  
+  invisible(
+    checkpoint_file
+  )
+}
+
+
 # Fetch accessions from NCBI - searching using entrez
-fetch_accessions_for_taxon <- function(taxon,
-                                       max_acc        = max_acc_per_taxa,
-                                       organism_scope = NULL,
-                                       include_filters = NULL,
-                                       exclude_filters = NULL) {
-  cat("Searching term:", taxon, "\n")
-  
-  if (exists("raw_entrez_terms", envir = .GlobalEnv) &&
-      taxon %in% names(get("raw_entrez_terms", envir = .GlobalEnv))) {
-    
-    filters <- get("raw_entrez_terms", envir = .GlobalEnv)[[taxon]]
-    message("Using raw Entrez query for ", taxon, ": ", filters)
-    
-  } else {
-    
-    if (is.null(organism_scope) && exists("organism_scope", .GlobalEnv)) {
-      organism_scope <- get("organism_scope", .GlobalEnv)
-    }
-    if (is.null(include_filters) && exists("search_include", .GlobalEnv)) {
-      include_filters <- get("search_include", .GlobalEnv)
-    }
-    if (is.null(exclude_filters) && exists("search_exclude", .GlobalEnv)) {
-      exclude_filters <- get("search_exclude", .GlobalEnv)
-    }
-    
-    filters <- compose_entrez_term(
-      taxon            = taxon,
-      organism_scope   = organism_scope,
-      include_filters  = include_filters,
-      exclude_filters  = exclude_filters
+fetch_accessions_for_taxon <- function(
+    taxon,
+    max_acc = max_acc_per_taxa,
+    organism_scope = NULL,
+    include_filters = NULL,
+    exclude_filters = NULL,
+    checkpoint_file = NULL,
+    checkpoint_every = 500,
+    resume = TRUE,
+    overwrite = FALSE,
+    accession_fetch_batch_size = 500,
+    page_max_retries = 3,
+    retry_wait = 5,
+    max_history_refreshes = 3,
+    ncbi_database = get0(
+      "ncbi_database",
+      envir = .GlobalEnv,
+      ifnotfound = default_ncbi_database
     )
-  }
+) {
   
-  search <- rentrez::entrez_search(
-    db = "nuccore",
-    term = filters,
-    use_history = TRUE,
-    retmax = 0
+  ncbi_database <- normalize_ncbi_database(
+    ncbi_database
   )
   
-  total_accession_count <- as.integer(search$count)
-  
-  if (is.na(total_accession_count) || total_accession_count == 0) {
-    cat("No accessions found for:", taxon, "\n")
-    return(data.frame(
-      Accession = character(0),
-      genus = character(0),
-      stringsAsFactors = FALSE
-    ))
-  }
-  
-  max_n <- if (identical(max_acc, "max")) Inf else as.numeric(max_acc)
-  pull_n <- min(total_accession_count, max_n)
-  
-  cat(
-    total_accession_count, "accessions available for", taxon,
-    "- pulling a maximum of", pull_n, "\n"
-  )
-  
-  acc_chunks <- list()
-  
-  for (seq_start in seq(0, pull_n - 1, by = 50)) {
-    recs <- rentrez::entrez_fetch(
-      db = "nuccore",
-      web_history = search$web_history,
-      rettype = "acc",
-      retmax = min(50, pull_n - seq_start),
-      retstart = seq_start
-    )
-    
-    acc_chunks[[length(acc_chunks) + 1L]] <- unlist(strsplit(recs, "\\s+"))
-    Sys.sleep(get_sleep_duration())
-  }
-  
-  acc_vec <- unique(unlist(acc_chunks))
-  acc_vec <- acc_vec[nzchar(acc_vec)]
-  
-  df <- data.frame(
-    Accession = acc_vec,
-    genus = taxon,
-    stringsAsFactors = FALSE
+  entrez_db <- get_entrez_database_name(
+    ncbi_database
   )
   
   cat(
-    "Accession retrieval for ", taxon,
-    " successful: ", nrow(df), " accessions\n\n",
+    "Searching term:",
+    taxon,
+    "\n"
+  )
+  
+  cat(
+    "NCBI database:",
+    ncbi_database,
+    " (",
+    entrez_db,
+    ")\n",
     sep = ""
   )
   
-  return(df)
+  
+  # ============================================================
+  # Existing checkpoint
+  # ============================================================
+  
+  existing_accessions <- data.frame(
+    Accession = character(0),
+    EntrezUID = character(0),
+    search_group = character(0),
+    ncbi_database = character(0),
+    stringsAsFactors = FALSE
+  )
+  
+  
+  if (
+    !is.null(checkpoint_file) &&
+    file.exists(checkpoint_file)
+  ) {
+    
+    if (overwrite) {
+      
+      message(
+        "Removing existing accession checkpoint: ",
+        checkpoint_file
+      )
+      
+      file.remove(
+        checkpoint_file
+      )
+      
+    } else if (resume) {
+      
+      existing_accessions <- read.csv(
+        checkpoint_file,
+        stringsAsFactors = FALSE,
+        colClasses = "character"
+      )
+      
+      
+      if (
+        !"Accession" %in%
+        names(existing_accessions)
+      ) {
+        
+        stop(
+          "Existing accession checkpoint is missing the Accession column: ",
+          checkpoint_file
+        )
+      }
+      
+      
+      if (
+        !"search_group" %in%
+        names(existing_accessions)
+      ) {
+        
+        existing_accessions$search_group <- rep(
+          taxon,
+          nrow(existing_accessions)
+        )
+      }
+      
+      
+      if (
+        !"EntrezUID" %in%
+        names(existing_accessions)
+      ) {
+        
+        existing_accessions$EntrezUID <- NA_character_
+      }
+      
+      
+      if (
+        !"ncbi_database" %in%
+        names(existing_accessions)
+      ) {
+        
+        existing_accessions$ncbi_database <-
+          ncbi_database
+      }
+      
+      
+      stored_databases <- unique(
+        existing_accessions$ncbi_database[
+          !is.na(existing_accessions$ncbi_database) &
+            nzchar(existing_accessions$ncbi_database)
+        ]
+      )
+      
+      
+      if (
+        length(stored_databases) > 0 &&
+        any(stored_databases != ncbi_database)
+      ) {
+        
+        stop(
+          "Accession checkpoint belongs to a different NCBI database:\n  ",
+          checkpoint_file,
+          "\nStored database: ",
+          paste(
+            stored_databases,
+            collapse = ", "
+          ),
+          "\nRequested database: ",
+          ncbi_database
+        )
+      }
+      
+      
+      existing_accessions <-
+        dplyr::distinct(
+          existing_accessions,
+          Accession,
+          .keep_all = TRUE
+        )
+      
+      
+      message(
+        "Resuming from checkpoint with ",
+        nrow(existing_accessions),
+        " accession(s): ",
+        checkpoint_file
+      )
+    }
+  }
+  
+  
+  # ============================================================
+  # Build Entrez search
+  # ============================================================
+  
+  if (
+    exists(
+      "raw_entrez_terms",
+      envir = .GlobalEnv
+    ) &&
+    taxon %in%
+    names(
+      get(
+        "raw_entrez_terms",
+        envir = .GlobalEnv
+      )
+    )
+  ) {
+    
+    filters <- get(
+      "raw_entrez_terms",
+      envir = .GlobalEnv
+    )[[taxon]]
+    
+    message(
+      "Using raw Entrez query for ",
+      taxon,
+      ": ",
+      filters
+    )
+    
+  } else {
+    
+    filters <- compose_entrez_term(
+      taxon = taxon,
+      organism_scope = organism_scope,
+      include_filters = include_filters,
+      exclude_filters = exclude_filters,
+      ncbi_database = ncbi_database
+    )
+  }
+  
+  
+  message(
+    "\nFINAL ENTREZ QUERY:\n",
+    filters,
+    "\n"
+  )
+  
+  
+  # ============================================================
+  # Helper: create a fresh Web History
+  # ============================================================
+  
+  create_history_search <- function() {
+    
+    last_error <- NULL
+    
+    
+    for (attempt in seq_len(page_max_retries)) {
+      
+      search_result <- tryCatch(
+        {
+          
+          rentrez::entrez_search(
+            db = entrez_db,
+            term = filters,
+            use_history = TRUE,
+            retmax = 0
+          )
+          
+        },
+        error = function(e) {
+          
+          last_error <<-
+            conditionMessage(e)
+          
+          NULL
+        }
+      )
+      
+      
+      if (
+        !is.null(search_result) &&
+        !is.null(search_result$web_history)
+      ) {
+        
+        return(
+          search_result
+        )
+      }
+      
+      
+      if (
+        attempt < page_max_retries
+      ) {
+        
+        wait_seconds <-
+          retry_wait * attempt
+        
+        
+        message(
+          "Entrez search / Web History creation failed ",
+          "(attempt ",
+          attempt,
+          " / ",
+          page_max_retries,
+          "). Waiting ",
+          wait_seconds,
+          " seconds before retry..."
+        )
+        
+        
+        Sys.sleep(
+          wait_seconds
+        )
+      }
+    }
+    
+    
+    stop(
+      "Unable to create NCBI Web History after ",
+      page_max_retries,
+      " attempt(s).\n",
+      "Last error: ",
+      last_error
+    )
+  }
+  
+  
+  # ============================================================
+  # Initial Web History
+  # ============================================================
+  
+  search <- create_history_search()
+  
+  
+  total_accession_count <- as.integer(
+    search$count
+  )
+  
+  
+  if (
+    is.na(total_accession_count) ||
+    total_accession_count == 0
+  ) {
+    
+    cat(
+      "No accessions found for:",
+      taxon,
+      "\n"
+    )
+    
+    return(
+      data.frame(
+        Accession = character(0),
+        EntrezUID = character(0),
+        search_group = character(0),
+        ncbi_database = character(0),
+        stringsAsFactors = FALSE
+      )
+    )
+  }
+  
+  
+  max_n <- if (
+    identical(
+      max_acc,
+      "max"
+    )
+  ) {
+    Inf
+  } else {
+    as.numeric(max_acc)
+  }
+  
+  
+  pull_n <- min(
+    total_accession_count,
+    max_n
+  )
+  
+  
+  cat(
+    total_accession_count,
+    " accessions available for ",
+    taxon,
+    " - pulling a maximum of ",
+    pull_n,
+    "\n",
+    sep = ""
+  )
+  
+  
+  already_retrieved <- nrow(
+    existing_accessions
+  )
+  
+  
+  if (
+    already_retrieved >=
+    pull_n
+  ) {
+    
+    message(
+      "Checkpoint already contains ",
+      already_retrieved,
+      " accession(s), which meets or exceeds the requested total of ",
+      pull_n,
+      "."
+    )
+    
+    
+    df <- existing_accessions[
+      seq_len(
+        min(
+          nrow(existing_accessions),
+          pull_n
+        )
+      ),
+      ,
+      drop = FALSE
+    ]
+    
+    
+    return(df)
+  }
+  
+  
+  # ============================================================
+  # Helper: retrieve one page with retries and Web History refresh
+  # ============================================================
+  
+  fetch_accession_page <- function(
+    seq_start,
+    this_retmax
+  ) {
+    
+    history_refresh_count <- 0L
+    last_error <- NULL
+    
+    
+    repeat {
+      
+      # --------------------------------------------------------
+      # Try current Web History several times
+      # --------------------------------------------------------
+      
+      for (attempt in seq_len(page_max_retries)) {
+        
+        new_df <- tryCatch(
+          {
+            
+            # --------------------------------------------------
+            # Nucleotide
+            # --------------------------------------------------
+            
+            if (
+              ncbi_database ==
+              "nucleotide"
+            ) {
+              
+              recs <- rentrez::entrez_fetch(
+                db = "nuccore",
+                web_history = search$web_history,
+                rettype = "acc",
+                retmax = this_retmax,
+                retstart = seq_start
+              )
+              
+              
+              new_acc <- unlist(
+                strsplit(
+                  recs,
+                  "\\s+"
+                )
+              )
+              
+              
+              new_acc <- new_acc[
+                nzchar(new_acc)
+              ]
+              
+              
+              if (
+                length(new_acc) !=
+                this_retmax
+              ) {
+                
+                stop(
+                  "NCBI returned ",
+                  length(new_acc),
+                  " accession(s), but ",
+                  this_retmax,
+                  " were requested at retstart ",
+                  seq_start,
+                  "."
+                )
+              }
+              
+              
+              data.frame(
+                Accession = new_acc,
+                EntrezUID = rep(
+                  NA_character_,
+                  length(new_acc)
+                ),
+                search_group = rep(
+                  taxon,
+                  length(new_acc)
+                ),
+                ncbi_database = rep(
+                  "nucleotide",
+                  length(new_acc)
+                ),
+                stringsAsFactors = FALSE
+              )
+              
+              
+            } else {
+              
+              # ------------------------------------------------
+              # BioSample
+              # ------------------------------------------------
+              
+              summaries <-
+                rentrez::entrez_summary(
+                  db = "biosample",
+                  web_history =
+                    search$web_history,
+                  retmax =
+                    this_retmax,
+                  retstart =
+                    seq_start,
+                  always_return_list =
+                    TRUE
+                )
+              
+              
+              new_df <-
+                .biosample_esummary_to_accessions(
+                  summaries =
+                    summaries,
+                  search_group =
+                    taxon
+                )
+              
+              
+              if (
+                nrow(new_df) !=
+                this_retmax
+              ) {
+                
+                stop(
+                  "NCBI returned ",
+                  nrow(new_df),
+                  " BioSample accession(s), but ",
+                  this_retmax,
+                  " were requested at retstart ",
+                  seq_start,
+                  "."
+                )
+              }
+              
+              
+              new_df
+            }
+            
+          },
+          error = function(e) {
+            
+            last_error <<-
+              conditionMessage(e)
+            
+            NULL
+          }
+        )
+        
+        
+        if (!is.null(new_df)) {
+          return(
+            new_df
+          )
+        }
+        
+        
+        if (
+          attempt <
+          page_max_retries
+        ) {
+          
+          wait_seconds <-
+            retry_wait * attempt
+          
+          
+          message(
+            "  Accession page failed at retstart ",
+            seq_start,
+            " (attempt ",
+            attempt,
+            " / ",
+            page_max_retries,
+            ")."
+          )
+          
+          
+          message(
+            "  Error: ",
+            last_error
+          )
+          
+          
+          message(
+            "  Waiting ",
+            wait_seconds,
+            " seconds before retry..."
+          )
+          
+          
+          Sys.sleep(
+            wait_seconds
+          )
+        }
+      }
+      
+      
+      # ========================================================
+      # Current Web History repeatedly failed
+      # ========================================================
+      
+      if (
+        history_refresh_count >=
+        max_history_refreshes
+      ) {
+        
+        stop(
+          "Accession retrieval failed at retstart ",
+          seq_start,
+          " after ",
+          page_max_retries,
+          " retry attempt(s) per Web History and ",
+          history_refresh_count,
+          " Web History refresh(es).\n",
+          "The existing accession checkpoint will be preserved.\n",
+          "Last NCBI error: ",
+          last_error
+        )
+      }
+      
+      
+      history_refresh_count <-
+        history_refresh_count + 1L
+      
+      
+      message("")
+      
+      message(
+        "  Refreshing NCBI Web History after repeated failure..."
+      )
+      
+      
+      message(
+        "  Web History refresh ",
+        history_refresh_count,
+        " / ",
+        max_history_refreshes
+      )
+      
+      
+      refreshed_search <- create_history_search()
+      
+      
+      refreshed_count <- as.integer(
+        refreshed_search$count
+      )
+      
+      
+      # --------------------------------------------------------
+      # Safety check
+      #
+      # If the search count changed, do not continue blindly
+      # using the same retstart positions.
+      # --------------------------------------------------------
+      
+      if (
+        is.na(refreshed_count) ||
+        refreshed_count !=
+        total_accession_count
+      ) {
+        
+        stop(
+          "NCBI search result count changed while refreshing Web History.\n",
+          "Original count: ",
+          total_accession_count,
+          "\nRefreshed count: ",
+          refreshed_count,
+          "\nStopping rather than risk skipping or duplicating accessions.\n",
+          "The existing accession checkpoint will be preserved."
+        )
+      }
+      
+      
+      search <<-
+        refreshed_search
+      
+      
+      message(
+        "  Fresh Web History created successfully."
+      )
+      
+      
+      message(
+        "  Retrying the same accession page at retstart ",
+        seq_start,
+        "."
+      )
+      
+      
+      Sys.sleep(
+        retry_wait
+      )
+    }
+  }
+  
+  
+  # ============================================================
+  # Retrieve accession pages
+  #
+  # Keep current page size = 50 for now.
+  # ============================================================
+  
+  record_chunks <- list()
+  
+  new_since_checkpoint <- 0L
+  
+  
+  for (
+    seq_start in seq(
+      already_retrieved,
+      pull_n - 1,
+      by = accession_fetch_batch_size
+    )
+  ) {
+    
+    this_retmax <- min(
+      accession_fetch_batch_size,
+      pull_n - seq_start
+    )
+    
+    
+    new_df <- fetch_accession_page(
+      seq_start = seq_start,
+      this_retmax = this_retmax
+    )
+    
+    
+    if (
+      !is.null(new_df) &&
+      nrow(new_df) > 0
+    ) {
+      
+      record_chunks[[
+        length(record_chunks) + 1L
+      ]] <- new_df
+      
+      
+      new_since_checkpoint <-
+        new_since_checkpoint +
+        nrow(new_df)
+    }
+    
+    
+    # ==========================================================
+    # Accession checkpoint
+    # ==========================================================
+    
+    if (
+      !is.null(checkpoint_file) &&
+      new_since_checkpoint >=
+      checkpoint_every
+    ) {
+      
+      newly_retrieved <-
+        dplyr::bind_rows(
+          record_chunks
+        )
+      
+      
+      checkpoint_df <-
+        dplyr::bind_rows(
+          existing_accessions,
+          newly_retrieved
+        )
+      
+      
+      checkpoint_df <-
+        dplyr::distinct(
+          checkpoint_df,
+          Accession,
+          .keep_all = TRUE
+        )
+      
+      
+      .write_accession_checkpoint(
+        checkpoint_df,
+        checkpoint_file
+      )
+      
+      
+      message(
+        "Accession checkpoint written: ",
+        checkpoint_file,
+        " | ",
+        nrow(checkpoint_df),
+        " unique accession(s)"
+      )
+      
+      
+      existing_accessions <-
+        checkpoint_df
+      
+      
+      record_chunks <- list()
+      new_since_checkpoint <- 0L
+    }
+    
+    
+    Sys.sleep(
+      get_sleep_duration()
+    )
+  }
+  
+  
+  # ============================================================
+  # Combine final accession set
+  # ============================================================
+  
+  remaining_df <- if (
+    length(record_chunks) > 0
+  ) {
+    
+    dplyr::bind_rows(
+      record_chunks
+    )
+    
+  } else {
+    
+    data.frame(
+      Accession = character(0),
+      EntrezUID = character(0),
+      search_group = character(0),
+      ncbi_database = character(0),
+      stringsAsFactors = FALSE
+    )
+  }
+  
+  
+  df <- dplyr::bind_rows(
+    existing_accessions,
+    remaining_df
+  )
+  
+  
+  df <- dplyr::distinct(
+    df,
+    Accession,
+    .keep_all = TRUE
+  )
+  
+  
+  # ============================================================
+  # Validate final accession count
+  # ============================================================
+  
+  if (
+    nrow(df) !=
+    pull_n
+  ) {
+    
+    stop(
+      "Accession retrieval ended with ",
+      nrow(df),
+      " unique accession(s), but ",
+      pull_n,
+      " were expected.\n",
+      "The checkpoint will be preserved and this search group ",
+      "will NOT be treated as successfully completed."
+    )
+  }
+  
+  
+  # ============================================================
+  # Final accession checkpoint
+  # ============================================================
+  
+  if (
+    !is.null(checkpoint_file)
+  ) {
+    
+    .write_accession_checkpoint(
+      df,
+      checkpoint_file
+    )
+    
+    
+    message(
+      "Final accession checkpoint written: ",
+      checkpoint_file,
+      " | ",
+      nrow(df),
+      " unique accession(s)"
+    )
+  }
+  
+  
+  cat(
+    "Accession retrieval for ",
+    taxon,
+    " successful: ",
+    nrow(df),
+    " accessions\n\n",
+    sep = ""
+  )
+  
+  
+  df
 }
 
+
 # pulling accessions using provided taxa names
-get_accessions_for_all_taxa <- function(taxa_list,
-                                        max_acc_per_taxa,
-                                        organism_scope  = NULL,
-                                        include_filters = NULL,
-                                        exclude_filters = NULL,
-                                        timing_file = "./intermediate_files/fetch_times_accessions.csv") {
+get_accessions_for_all_taxa <- function(
+    taxa_list,
+    max_acc_per_taxa,
+    organism_scope = NULL,
+    include_filters = NULL,
+    exclude_filters = NULL,
+    timing_file = "./intermediate_files/fetch_times_accessions.csv",
+    checkpoint_every = 500,
+    resume = TRUE,
+    overwrite = FALSE,
+    accession_fetch_batch_size = 500,
+    page_max_retries = 3,
+    retry_wait = 5,
+    max_history_refreshes = 3,
+    ncbi_database = get0(
+      "ncbi_database",
+      envir = .GlobalEnv,
+      ifnotfound = default_ncbi_database
+    )
+) {
   
-  # Resolve defaults if not provided
-  if (is.null(organism_scope) && exists("organism_scope", .GlobalEnv))
-    organism_scope <- get("organism_scope", envir = .GlobalEnv)
-  if (is.null(include_filters) && exists("search_include", .GlobalEnv))
-    include_filters <- get("search_include", envir = .GlobalEnv)
-  if (is.null(exclude_filters) && exists("search_exclude", .GlobalEnv))
-    exclude_filters <- get("search_exclude", envir = .GlobalEnv)
+  ncbi_database <- normalize_ncbi_database(
+    ncbi_database
+  )
   
-  taxa_frame_acc <- vector("list", length(taxa_list))
   
-  timing_log <- data.frame(Taxon = character(),
-                           Num_accessions = integer(),
-                           Start_time = character(),
-                           End_time = character(),
-                           Elapsed_minutes = numeric(),
-                           stringsAsFactors = FALSE)
+  taxa_frame_acc <- vector(
+    "list",
+    length(taxa_list)
+  )
+  
+  
+  timing_log <- data.frame(
+    Taxon = character(),
+    NCBI_database = character(),
+    Num_accessions = integer(),
+    Start_time = character(),
+    End_time = character(),
+    Elapsed_minutes = numeric(),
+    Status = character(),
+    Error = character(),
+    stringsAsFactors = FALSE
+  )
+  
   
   overall_start <- Sys.time()
   
-  for (i in seq_along(taxa_list)) {
+  
+  for (
+    i in seq_along(taxa_list)
+  ) {
+    
     term <- taxa_list[i]
-    cat("\n=== Starting", term, "(", i, "of", length(taxa_list), ") ===\n")
+    
+    
+    cat(
+      "\n=== Starting ",
+      term,
+      " (",
+      i,
+      " of ",
+      length(taxa_list),
+      ") ===\n",
+      sep = ""
+    )
+    
+    
+    safe_term <- gsub(
+      "[^A-Za-z0-9_.-]+",
+      "_",
+      term
+    )
+    
+    
+    checkpoint_prefix <- if (
+      ncbi_database ==
+      "nucleotide"
+    ) {
+      "Accessions_for_"
+    } else {
+      "BioSample_accessions_for_"
+    }
+    
+    
+    outfile_name <- file.path(
+      "./intermediate_files",
+      paste0(
+        checkpoint_prefix,
+        safe_term,
+        ".csv"
+      )
+    )
+    
+    
     start_time <- Sys.time()
     
-    tempdf <- tryCatch({
-      fetch_accessions_for_taxon(
-        taxon           = term,
-        max_acc         = max_acc_per_taxa,
-        organism_scope  = organism_scope,
-        include_filters = include_filters,
-        exclude_filters = exclude_filters
-      )
-    }, error = function(e) {
-      cat("ERROR:", conditionMessage(e), "\n")
-      data.frame(Accession = character(0), genus = character(0), stringsAsFactors = FALSE)
-    })
+    
+    retrieval_error <- NULL
+    
+    
+    tempdf <- tryCatch(
+      {
+        
+        fetch_accessions_for_taxon(
+          taxon = term,
+          max_acc =
+            max_acc_per_taxa,
+          organism_scope =
+            organism_scope,
+          include_filters =
+            include_filters,
+          exclude_filters =
+            exclude_filters,
+          checkpoint_file =
+            outfile_name,
+          checkpoint_every =
+            checkpoint_every,
+          resume =
+            resume,
+          overwrite =
+            overwrite,
+          accession_fetch_batch_size =
+            accession_fetch_batch_size,
+          page_max_retries =
+            page_max_retries,
+          retry_wait =
+            retry_wait,
+          max_history_refreshes =
+            max_history_refreshes,
+          ncbi_database =
+            ncbi_database
+        )
+      },
+      error = function(e) {
+        
+        retrieval_error <<-
+          conditionMessage(e)
+        
+        NULL
+      }
+    )
+    
     
     end_time <- Sys.time()
-    elapsed <- as.numeric(difftime(end_time, start_time, units = "mins"))
-    cat(sprintf("Finished %s in %.2f minutes\n", term, elapsed))
     
-    timing_log <- rbind(timing_log, data.frame(
-      Taxon = term,
-      Num_accessions = nrow(tempdf),
-      Start_time = format(start_time, "%Y-%m-%d %H:%M:%S"),
-      End_time = format(end_time, "%Y-%m-%d %H:%M:%S"),
-      Elapsed_minutes = round(elapsed, 2),
-      stringsAsFactors = FALSE
-    ))
     
-    outfile_name <- paste0("./intermediate_files/Accessions_for_", term, ".csv")
-    write.csv(tempdf, outfile_name, row.names = FALSE, quote = FALSE)
-    taxa_frame_acc[[i]] <- tempdf
+    elapsed <- as.numeric(
+      difftime(
+        end_time,
+        start_time,
+        units = "mins"
+      )
+    )
+    
+    
+    # ==========================================================
+    # Retrieval failed
+    # ==========================================================
+    
+    if (is.null(tempdf)) {
+      
+      cat(
+        "\nERROR while retrieving ",
+        term,
+        ":\n",
+        retrieval_error,
+        "\n",
+        sep = ""
+      )
+      
+      
+      checkpoint_rows <- NA_integer_
+      
+      
+      if (file.exists(outfile_name)) {
+        
+        checkpoint_rows <- tryCatch(
+          {
+            
+            checkpoint_check <- read.csv(
+              outfile_name,
+              stringsAsFactors = FALSE,
+              colClasses = "character"
+            )
+            
+            
+            nrow(
+              checkpoint_check
+            )
+          },
+          error = function(e) {
+            NA_integer_
+          }
+        )
+        
+        
+        message(
+          "Existing accession checkpoint preserved: ",
+          outfile_name,
+          if (!is.na(checkpoint_rows)) {
+            paste0(
+              " | ",
+              checkpoint_rows,
+              " accession(s)"
+            )
+          } else {
+            ""
+          }
+        )
+      }
+      
+      
+      timing_log <- rbind(
+        timing_log,
+        data.frame(
+          Taxon = term,
+          NCBI_database =
+            ncbi_database,
+          Num_accessions =
+            checkpoint_rows,
+          Start_time = format(
+            start_time,
+            "%Y-%m-%d %H:%M:%S"
+          ),
+          End_time = format(
+            end_time,
+            "%Y-%m-%d %H:%M:%S"
+          ),
+          Elapsed_minutes =
+            round(
+              elapsed,
+              2
+            ),
+          Status =
+            "FAILED",
+          Error =
+            retrieval_error,
+          stringsAsFactors = FALSE
+        )
+      )
+      
+      
+      write.csv(
+        timing_log,
+        timing_file,
+        row.names = FALSE
+      )
+      
+      
+      stop(
+        "Accession retrieval stopped because search group '",
+        term,
+        "' did not complete.\n",
+        "The existing accession checkpoint has been preserved.\n",
+        "Rerun with resume = TRUE after the NCBI error has cleared.\n",
+        "Original error:\n",
+        retrieval_error,
+        call. = FALSE
+      )
+    }
+    
+    
+    # ==========================================================
+    # Retrieval succeeded
+    # ==========================================================
+    
+    cat(
+      sprintf(
+        "Finished %s in %.2f minutes\n",
+        term,
+        elapsed
+      )
+    )
+    
+    
+    timing_log <- rbind(
+      timing_log,
+      data.frame(
+        Taxon = term,
+        NCBI_database =
+          ncbi_database,
+        Num_accessions =
+          nrow(tempdf),
+        Start_time = format(
+          start_time,
+          "%Y-%m-%d %H:%M:%S"
+        ),
+        End_time = format(
+          end_time,
+          "%Y-%m-%d %H:%M:%S"
+        ),
+        Elapsed_minutes =
+          round(
+            elapsed,
+            2
+          ),
+        Status =
+          "COMPLETE",
+        Error =
+          "",
+        stringsAsFactors = FALSE
+      )
+    )
+    
+    
+    taxa_frame_acc[[i]] <-
+      tempdf
+    
+    
+    write.csv(
+      timing_log,
+      timing_file,
+      row.names = FALSE
+    )
   }
   
-  total_elapsed <- as.numeric(difftime(Sys.time(), overall_start, units = "mins"))
-  cat("\nAll taxa completed in", round(total_elapsed, 2), "minutes.\n")
   
-  non_empty <- Filter(function(x) nrow(x) > 0, taxa_frame_acc)
-  accession_list <- if (length(non_empty)) {
-    do.call(rbind, non_empty)
+  # ============================================================
+  # All search groups completed successfully
+  # ============================================================
+  
+  total_elapsed <- as.numeric(
+    difftime(
+      Sys.time(),
+      overall_start,
+      units = "mins"
+    )
+  )
+  
+  
+  cat(
+    "\nAll taxa completed in ",
+    round(total_elapsed, 2),
+    " minutes.\n",
+    sep = ""
+  )
+  
+  
+  non_empty <- Filter(
+    function(x) {
+      !is.null(x) &&
+        nrow(x) > 0
+    },
+    taxa_frame_acc
+  )
+  
+  
+  all_memberships <- if (
+    length(non_empty)
+  ) {
+    
+    dplyr::bind_rows(
+      non_empty
+    )
+    
   } else {
-    data.frame(Accession = character(0), genus = character(0), stringsAsFactors = FALSE)
+    
+    data.frame(
+      Accession = character(0),
+      EntrezUID = character(0),
+      search_group = character(0),
+      ncbi_database = character(0),
+      stringsAsFactors = FALSE
+    )
   }
   
-  write.csv(accession_list, "./intermediate_files/all_pulled_accessions.csv", row.names = FALSE)
-  write.csv(timing_log, timing_file, row.names = FALSE)
-  cat("Timing log written to ", timing_file, "\n", sep = "")
   
-  return(accession_list)
+  write.csv(
+    all_memberships,
+    "./intermediate_files/all_pulled_accession_memberships.csv",
+    row.names = FALSE
+  )
+  
+  
+  accession_list <-
+    dplyr::distinct(
+      all_memberships,
+      Accession,
+      .keep_all = TRUE
+    )
+  
+  
+  write.csv(
+    accession_list,
+    "./intermediate_files/all_pulled_accessions.csv",
+    row.names = FALSE
+  )
+  
+  
+  write.csv(
+    timing_log,
+    timing_file,
+    row.names = FALSE
+  )
+  
+  
+  cat(
+    "Timing log written to ",
+    timing_file,
+    "\n",
+    sep = ""
+  )
+  
+  
+  accession_list
 }
 
 
-# Metadata retrieval, using list of pulled accessions
-fetch_metadata_for_accession <- function(accession) {
+fetch_ncbi_metadata_batch_xml <- function(
+    accessions,
+    post_chunk_size = 500,
+    biosample_fetch_chunk_size = 50,
+    ncbi_database = get0(
+      "ncbi_database",
+      envir = .GlobalEnv,
+      ifnotfound = default_ncbi_database
+    )
+) {
+  
+  ncbi_database <- normalize_ncbi_database(
+    ncbi_database
+  )
+  
+  
+  accessions <- unique(
+    trimws(
+      as.character(
+        accessions
+      )
+    )
+  )
+  
+  
+  accessions <- accessions[
+    !is.na(accessions) &
+      nzchar(accessions)
+  ]
+  
+  
+  if (
+    length(accessions) == 0
+  ) {
+    stop(
+      "No valid accessions were supplied."
+    )
+  }
+  
+  
+  # ============================================================
+  # NUCLEOTIDE
+  #
+  # Preserve existing EPost + History Server behavior.
+  # ============================================================
+  
+  if (
+    ncbi_database ==
+    "nucleotide"
+  ) {
+    
+    post_chunks <- split(
+      accessions,
+      ceiling(
+        seq_along(accessions) /
+          post_chunk_size
+      )
+    )
+    
+    
+    message(
+      "Posting ",
+      length(accessions),
+      " accession(s) to NCBI History Server in ",
+      length(post_chunks),
+      " chunk(s)..."
+    )
+    
+    
+    web_history <- NULL
+    
+    
+    for (
+      i in seq_along(
+        post_chunks
+      )
+    ) {
+      
+      this_chunk <- unname(
+        post_chunks[[i]]
+      )
+      
+      
+      message(
+        "  Posting chunk ",
+        i,
+        " / ",
+        length(post_chunks),
+        " (",
+        length(this_chunk),
+        " accession(s))"
+      )
+      
+      
+      if (is.null(web_history)) {
+        
+        web_history <-
+          rentrez::entrez_post(
+            db = "nuccore",
+            id = this_chunk
+          )
+        
+      } else {
+        
+        web_history <-
+          rentrez::entrez_post(
+            db = "nuccore",
+            id = this_chunk,
+            web_history =
+              web_history
+          )
+      }
+      
+      
+      Sys.sleep(
+        get_sleep_duration()
+      )
+    }
+    
+    
+    message(
+      "Fetching ",
+      length(accessions),
+      " Nucleotide record(s) from NCBI History Server..."
+    )
+    
+    
+    xml_text <-
+      rentrez::entrez_fetch(
+        db = "nuccore",
+        web_history =
+          web_history,
+        rettype = "gb",
+        retmode = "xml",
+        retmax =
+          length(accessions)
+      )
+    
+    
+    if (
+      is.null(xml_text) ||
+      !nzchar(xml_text)
+    ) {
+      
+      stop(
+        "NCBI returned an empty Nucleotide response for a batch of ",
+        length(accessions),
+        " accession(s)."
+      )
+    }
+    
+    
+    doc <- XML::xmlParse(
+      xml_text
+    )
+    
+    
+    record_nodes <- XML::getNodeSet(
+      doc,
+      "//GBSeq"
+    )
+    
+    
+    if (
+      length(record_nodes) == 0
+    ) {
+      
+      stop(
+        "No GBSeq records were found in the NCBI XML response."
+      )
+    }
+    
+    
+    message(
+      "Requested ",
+      length(accessions),
+      " accession(s); NCBI returned ",
+      length(record_nodes),
+      " GBSeq record(s)."
+    )
+    
+    
+    return(
+      record_nodes
+    )
+  }
+  
+  
+  # ============================================================
+  # BIOSAMPLE
+  #
+  # BioSample full records are returned directly as XML.
+  # Keep requests small enough that accession lists remain
+  # manageable.
+  # ============================================================
+  
+  fetch_chunks <- split(
+    accessions,
+    ceiling(
+      seq_along(accessions) /
+        biosample_fetch_chunk_size
+    )
+  )
+  
+  
+  message(
+    "Fetching ",
+    length(accessions),
+    " BioSample record(s) in ",
+    length(fetch_chunks),
+    " XML chunk(s)..."
+  )
+  
+  
+  record_nodes <- list()
+  
+  
+  for (
+    i in seq_along(
+      fetch_chunks
+    )
+  ) {
+    
+    this_chunk <- unname(
+      fetch_chunks[[i]]
+    )
+    
+    
+    message(
+      "  Fetching BioSample XML chunk ",
+      i,
+      " / ",
+      length(fetch_chunks),
+      " (",
+      length(this_chunk),
+      " accession(s))"
+    )
+    
+    
+    xml_text <-
+      rentrez::entrez_fetch(
+        db = "biosample",
+        id = this_chunk,
+        rettype = "full",
+        retmode = "xml"
+      )
+    
+    
+    if (
+      is.null(xml_text) ||
+      !nzchar(xml_text)
+    ) {
+      
+      stop(
+        "NCBI returned an empty BioSample response for ",
+        length(this_chunk),
+        " accession(s)."
+      )
+    }
+    
+    
+    doc <- XML::xmlParse(
+      xml_text
+    )
+    
+    
+    this_nodes <- XML::getNodeSet(
+      doc,
+      "//BioSample"
+    )
+    
+    
+    if (
+      length(this_nodes) == 0
+    ) {
+      
+      stop(
+        "No BioSample records were found in the NCBI XML response."
+      )
+    }
+    
+    
+    record_nodes <- c(
+      record_nodes,
+      this_nodes
+    )
+    
+    
+    Sys.sleep(
+      get_sleep_duration()
+    )
+  }
+  
+  
+  message(
+    "Requested ",
+    length(accessions),
+    " BioSample accession(s); NCBI returned ",
+    length(record_nodes),
+    " BioSample record(s)."
+  )
+  
+  
+  record_nodes
+}
+
+
+fetch_metadata_for_accession_batch <- function(
+    accessions,
+    ncbi_database = get0(
+      "ncbi_database",
+      envir = .GlobalEnv,
+      ifnotfound = default_ncbi_database
+    )
+) {
+  
+  ncbi_database <- normalize_ncbi_database(
+    ncbi_database
+  )
+  
+  
+  record_nodes <-
+    fetch_ncbi_metadata_batch_xml(
+      accessions = accessions,
+      ncbi_database =
+        ncbi_database
+    )
+  
+  
+  parser <- if (
+    ncbi_database ==
+    "nucleotide"
+  ) {
+    parse_gbseq_node
+  } else {
+    parse_biosample_node
+  }
+  
+  
+  metadata_list <- lapply(
+    record_nodes,
+    parser
+  )
+  
+  
+  metadata_df <- dplyr::bind_rows(
+    metadata_list
+  )
+  
+  
+  metadata_df
+}
+
+
+fetch_metadata_batch_resilient <- function(
+    accessions,
+    min_batch_size = 1,
+    max_retries = 2,
+    retry_wait = 5,
+    ncbi_database = get0(
+      "ncbi_database",
+      envir = .GlobalEnv,
+      ifnotfound = default_ncbi_database
+    )
+) {
+  
+  ncbi_database <- normalize_ncbi_database(
+    ncbi_database
+  )
+  
+  
+  accessions <- unique(
+    trimws(
+      as.character(
+        accessions
+      )
+    )
+  )
+  
+  
+  accessions <- accessions[
+    !is.na(accessions) &
+      nzchar(accessions)
+  ]
+  
+  
+  if (
+    length(accessions) == 0
+  ) {
+    return(NULL)
+  }
+  
+  
+  # ============================================================
+  # First try the entire requested batch
+  # ============================================================
+  
+  last_error <- NULL
+  
+  
+  for (
+    attempt in seq_len(
+      max_retries
+    )
+  ) {
+    
+    result <- tryCatch(
+      {
+        
+        fetch_metadata_for_accession_batch(
+          accessions,
+          ncbi_database =
+            ncbi_database
+        )
+      },
+      error = function(e) {
+        
+        last_error <<-
+          conditionMessage(e)
+        
+        NULL
+      }
+    )
+    
+    
+    if (!is.null(result)) {
+      return(result)
+    }
+    
+    
+    if (
+      attempt <
+      max_retries
+    ) {
+      
+      message(
+        "  Batch of ",
+        length(accessions),
+        " failed (attempt ",
+        attempt,
+        " / ",
+        max_retries,
+        "). Waiting ",
+        retry_wait,
+        " seconds before retry..."
+      )
+      
+      
+      Sys.sleep(
+        retry_wait
+      )
+    }
+  }
+  
+  
+  # ============================================================
+  # Split failed batches progressively
+  # ============================================================
+  
+  if (
+    length(accessions) >
+    min_batch_size
+  ) {
+    
+    split_point <- ceiling(
+      length(accessions) / 2
+    )
+    
+    
+    first_half <- accessions[
+      seq_len(split_point)
+    ]
+    
+    
+    second_half <- accessions[
+      seq.int(
+        split_point + 1L,
+        length(accessions)
+      )
+    ]
+    
+    
+    message(
+      "  Batch of ",
+      length(accessions),
+      " failed after ",
+      max_retries,
+      " attempt(s). Splitting into ",
+      length(first_half),
+      " + ",
+      length(second_half),
+      "."
+    )
+    
+    
+    first_result <-
+      fetch_metadata_batch_resilient(
+        accessions =
+          first_half,
+        min_batch_size =
+          min_batch_size,
+        max_retries =
+          max_retries,
+        retry_wait =
+          retry_wait,
+        ncbi_database =
+          ncbi_database
+      )
+    
+    
+    second_result <- if (
+      length(second_half) > 0
+    ) {
+      
+      fetch_metadata_batch_resilient(
+        accessions =
+          second_half,
+        min_batch_size =
+          min_batch_size,
+        max_retries =
+          max_retries,
+        retry_wait =
+          retry_wait,
+        ncbi_database =
+          ncbi_database
+      )
+      
+    } else {
+      NULL
+    }
+    
+    
+    successful_results <- Filter(
+      Negate(is.null),
+      list(
+        first_result,
+        second_result
+      )
+    )
+    
+    
+    if (
+      length(successful_results) == 0
+    ) {
+      return(NULL)
+    }
+    
+    
+    return(
+      dplyr::bind_rows(
+        successful_results
+      )
+    )
+  }
+  
+  
+  # ============================================================
+  # Single accession still failed
+  # ============================================================
+  
+  message(
+    "  FAILED | ",
+    accessions[1],
+    " | ",
+    last_error
+  )
+  
+  
+  NULL
+}
+
+accession_completion_file <- function() {
+  "./intermediate_files/accession_retrieval_complete.rds"
+}
+
+
+
+write_accession_completion_marker <- function(
+    taxa_list,
+    accession_file = "./intermediate_files/all_pulled_accessions.csv",
+    ncbi_database = get0(
+      "ncbi_database",
+      envir = .GlobalEnv,
+      ifnotfound = default_ncbi_database
+    )
+) {
+  
+  ncbi_database <- normalize_ncbi_database(
+    ncbi_database
+  )
+  
+  
+  # ============================================================
+  # Accession manifest must exist
+  # ============================================================
+  
+  if (!file.exists(accession_file)) {
+    
+    stop(
+      "Cannot write accession completion marker because the ",
+      "accession manifest does not exist:\n  ",
+      accession_file
+    )
+  }
+  
+  
+  # ============================================================
+  # Read and validate accession manifest
+  # ============================================================
+  
+  accession_manifest <- read.csv(
+    accession_file,
+    stringsAsFactors = FALSE,
+    colClasses = "character"
+  )
+  
+  
+  if (
+    !"Accession" %in%
+    names(accession_manifest)
+  ) {
+    
+    stop(
+      "Cannot write accession completion marker because the ",
+      "accession manifest is missing the Accession column:\n  ",
+      accession_file
+    )
+  }
+  
+  
+  valid_accessions <- accession_manifest$Accession[
+    !is.na(accession_manifest$Accession) &
+      nzchar(trimws(accession_manifest$Accession))
+  ]
+  
+  
+  n_accessions <- length(
+    unique(valid_accessions)
+  )
+  
+  
+  # ============================================================
+  # An empty accession manifest should never be marked complete
+  # ============================================================
+  
+  if (n_accessions == 0) {
+    
+    stop(
+      "Cannot write accession completion marker because the ",
+      "accession manifest contains zero accessions:\n  ",
+      accession_file
+    )
+  }
+  
+  
+  # ============================================================
+  # Build completion marker
+  # ============================================================
+  
+  marker <- list(
+    completed = TRUE,
+    taxa_list =
+      as.character(taxa_list),
+    n_search_groups =
+      length(taxa_list),
+    n_accessions =
+      n_accessions,
+    ncbi_database =
+      ncbi_database,
+    completed_at =
+      as.character(Sys.time()),
+    accession_file =
+      accession_file
+  )
+  
+  
+  # ============================================================
+  # Save marker
+  # ============================================================
+  
+  saveRDS(
+    marker,
+    accession_completion_file()
+  )
+  
+  
+  message(
+    "Accession retrieval completion marker written: ",
+    accession_completion_file(),
+    " | ",
+    n_accessions,
+    " unique accession(s)"
+  )
+  
+  
+  invisible(marker)
+}
+
+
+accession_retrieval_is_complete <- function(
+    taxa_list,
+    ncbi_database = get0(
+      "ncbi_database",
+      envir = .GlobalEnv,
+      ifnotfound = default_ncbi_database
+    )
+) {
+  
+  ncbi_database <- normalize_ncbi_database(
+    ncbi_database
+  )
+  
+  
+  marker_path <- accession_completion_file()
+  
+  
+  # ============================================================
+  # No marker = definitely not complete
+  # ============================================================
+  
+  if (!file.exists(marker_path)) {
+    return(FALSE)
+  }
+  
+  
+  # ============================================================
+  # Read completion marker safely
+  # ============================================================
+  
+  marker <- tryCatch(
+    readRDS(marker_path),
+    error = function(e) NULL
+  )
+  
+  
+  if (is.null(marker)) {
+    
+    message(
+      "Accession completion marker could not be read. ",
+      "Accession retrieval will be checked again."
+    )
+    
+    return(FALSE)
+  }
+  
+  
+  # ============================================================
+  # Marker must explicitly say completed
+  # ============================================================
+  
+  if (!isTRUE(marker$completed)) {
+    return(FALSE)
+  }
+  
+  
+  # ============================================================
+  # Determine accession manifest path
+  # ============================================================
+  
+  accession_file <- if (
+    !is.null(marker$accession_file) &&
+    length(marker$accession_file) > 0 &&
+    !is.na(marker$accession_file[1]) &&
+    nzchar(marker$accession_file[1])
+  ) {
+    
+    marker$accession_file[1]
+    
+  } else {
+    
+    "./intermediate_files/all_pulled_accessions.csv"
+  }
+  
+  
+  # ============================================================
+  # Manifest must actually exist
+  # ============================================================
+  
+  if (!file.exists(accession_file)) {
+    
+    message(
+      "Accession completion marker exists, but the accession manifest ",
+      "is missing:\n  ",
+      accession_file,
+      "\nAccession retrieval will be checked again."
+    )
+    
+    return(FALSE)
+  }
+  
+  
+  # ============================================================
+  # Database compatibility
+  # ============================================================
+  
+  # Old completion markers predate database tracking.
+  # Interpret those as Nucleotide runs.
+  marker_database <- if (
+    is.null(marker$ncbi_database)
+  ) {
+    
+    "nucleotide"
+    
+  } else {
+    
+    normalize_ncbi_database(
+      marker$ncbi_database
+    )
+  }
+  
+  
+  same_database <- identical(
+    marker_database,
+    ncbi_database
+  )
+  
+  
+  if (!same_database) {
+    
+    message(
+      "Existing accession completion marker belongs to NCBI database '",
+      marker_database,
+      "', not '",
+      ncbi_database,
+      "'. Accession retrieval will be checked again."
+    )
+    
+    return(FALSE)
+  }
+  
+  
+  # ============================================================
+  # Search-group compatibility
+  # ============================================================
+  
+  same_taxa <- identical(
+    as.character(marker$taxa_list),
+    as.character(taxa_list)
+  )
+  
+  
+  if (!same_taxa) {
+    
+    message(
+      "Existing accession completion marker belongs to a different ",
+      "set of search groups. Accession retrieval will be checked again."
+    )
+    
+    return(FALSE)
+  }
+  
+  
+  # ============================================================
+  # Validate accession manifest
+  #
+  # This specifically prevents an empty all_pulled_accessions.csv
+  # from being accepted as a completed run.
+  # ============================================================
+  
+  manifest_check <- tryCatch(
+    {
+      
+      manifest <- read.csv(
+        accession_file,
+        stringsAsFactors = FALSE,
+        colClasses = "character"
+      )
+      
+      
+      if (
+        !"Accession" %in%
+        names(manifest)
+      ) {
+        
+        stop(
+          "Accession column is missing."
+        )
+      }
+      
+      
+      valid_accessions <- manifest$Accession[
+        !is.na(manifest$Accession) &
+          nzchar(trimws(manifest$Accession))
+      ]
+      
+      
+      length(
+        unique(valid_accessions)
+      )
+    },
+    error = function(e) {
+      
+      message(
+        "Could not validate accession manifest: ",
+        conditionMessage(e)
+      )
+      
+      NA_integer_
+    }
+  )
+  
+  
+  # ============================================================
+  # Unreadable manifest = not complete
+  # ============================================================
+  
+  if (is.na(manifest_check)) {
+    
+    message(
+      "Existing accession manifest could not be validated. ",
+      "Accession retrieval will be checked again."
+    )
+    
+    return(FALSE)
+  }
+  
+  
+  # ============================================================
+  # Empty manifest = definitely not complete
+  # ============================================================
+  
+  if (manifest_check == 0) {
+    
+    message(
+      "Accession completion marker points to an empty accession manifest. ",
+      "This run will NOT be treated as complete."
+    )
+    
+    return(FALSE)
+  }
+  
+  # ============================================================
+  # For newer markers, verify that the manifest still contains
+  # the same number of accessions that were present when the
+  # completion marker was written.
+  # ============================================================
+  
+  if (
+    !is.null(marker$n_accessions)
+  ) {
+    
+    expected_accessions <- as.integer(
+      marker$n_accessions
+    )
+    
+    
+    if (
+      is.na(expected_accessions) ||
+      manifest_check != expected_accessions
+    ) {
+      
+      message(
+        "Accession completion marker does not match the current manifest."
+      )
+      
+      
+      message(
+        "Marker count: ",
+        expected_accessions,
+        " | Current manifest count: ",
+        manifest_check
+      )
+      
+      
+      message(
+        "Accession retrieval will be checked again."
+      )
+      
+      
+      return(FALSE)
+    }
+  }
+  
+  # ============================================================
+  # Existing marker and manifest appear internally consistent
+  # ============================================================
+  
+  TRUE
+}
+
+
+parse_gbseq_node <- function(gbseq_node) {
   # keep list (top-level + qualifier-level)
   if (!exists("metadata_categories_keep", .GlobalEnv)) {
     metadata_categories_keep <- c(
@@ -406,27 +3670,76 @@ fetch_metadata_for_accession <- function(accession) {
     )
   }
   
-  x <- rentrez::entrez_fetch(db = "nuccore", id = accession, rettype = "xml")
-  doc <- XML::xmlParse(x)
+  doc <- gbseq_node
   
   # top-level fields
-  top_locus     <- XML::xpathSApply(doc, "//GBSeq_locus", xmlValue)
-  top_len       <- XML::xpathSApply(doc, "//GBSeq_length", xmlValue)
-  top_strand    <- XML::xpathSApply(doc, "//GBSeq_strandedness", xmlValue)
-  top_moltype   <- XML::xpathSApply(doc, "//GBSeq_moltype", xmlValue)
-  top_upd       <- XML::xpathSApply(doc, "//GBSeq_update-date", xmlValue)
-  top_create    <- XML::xpathSApply(doc, "//GBSeq_create-date", xmlValue)
-  top_def       <- XML::xpathSApply(doc, "//GBSeq_definition", xmlValue)
-  top_accver    <- XML::xpathSApply(doc, "//GBSeq_accession-version", xmlValue)
-  top_proj      <- XML::xpathSApply(doc, "//GBSeq_project", xmlValue)
-  top_org       <- XML::xpathSApply(doc, "//GBSeq_organism", xmlValue)
-  top_tax       <- XML::xpathSApply(doc, "//GBSeq_taxonomy", xmlValue)
-  top_seq       <- XML::xpathSApply(doc, "//GBSeq_sequence", xmlValue)
+  top_locus     <- XML::xpathSApply(doc, "./GBSeq_locus", XML::xmlValue)
+  top_len       <- XML::xpathSApply(doc, "./GBSeq_length", XML::xmlValue)
+  top_strand    <- XML::xpathSApply(doc, "./GBSeq_strandedness", XML::xmlValue)
+  top_moltype   <- XML::xpathSApply(doc, "./GBSeq_moltype", XML::xmlValue)
+  top_upd       <- XML::xpathSApply(doc, "./GBSeq_update-date", XML::xmlValue)
+  top_create    <- XML::xpathSApply(doc, "./GBSeq_create-date", XML::xmlValue)
+  top_def       <- XML::xpathSApply(doc, "./GBSeq_definition", XML::xmlValue)
+  top_accver    <- XML::xpathSApply(doc, "./GBSeq_accession-version", XML::xmlValue)
+  top_proj      <- XML::xpathSApply(doc, "./GBSeq_project", XML::xmlValue)
+  top_org       <- XML::xpathSApply(doc, "./GBSeq_organism", XML::xmlValue)
+  top_tax       <- XML::xpathSApply(doc, "./GBSeq_taxonomy", XML::xmlValue)
+  top_seq       <- XML::xpathSApply(doc, "./GBSeq_sequence", XML::xmlValue)
   
   # qualifiers
-  q_names  <- XML::xpathSApply(doc, "//GBQualifier/GBQualifier_name",  xmlValue)
-  q_values <- XML::xpathSApply(doc, "//GBQualifier/GBQualifier_value", xmlValue)
-  quals <- data.frame(name = q_names, value = q_values, stringsAsFactors = FALSE)
+  # Parse each qualifier node individually so names and values stay aligned,
+  # even when a qualifier has no GBQualifier_value element.
+  qualifier_nodes <- XML::getNodeSet(
+    doc,
+    ".//GBQualifier"
+  )
+  
+  if (length(qualifier_nodes) > 0) {
+    
+    qualifier_rows <- lapply(
+      qualifier_nodes,
+      function(node) {
+        
+        name_node <- XML::getNodeSet(
+          node,
+          "./GBQualifier_name"
+        )
+        
+        value_node <- XML::getNodeSet(
+          node,
+          "./GBQualifier_value"
+        )
+        
+        qualifier_name <- if (length(name_node) > 0) {
+          XML::xmlValue(name_node[[1]])
+        } else {
+          NA_character_
+        }
+        
+        qualifier_value <- if (length(value_node) > 0) {
+          XML::xmlValue(value_node[[1]])
+        } else {
+          ""
+        }
+        
+        data.frame(
+          name = qualifier_name,
+          value = qualifier_value,
+          stringsAsFactors = FALSE
+        )
+      }
+    )
+    
+    quals <- dplyr::bind_rows(qualifier_rows)
+    
+  } else {
+    
+    quals <- data.frame(
+      name = character(0),
+      value = character(0),
+      stringsAsFactors = FALSE
+    )
+  }
   
   # make a named list for qualifiers we care about
   get_q <- function(nm) {
@@ -449,6 +3762,7 @@ fetch_metadata_for_accession <- function(accession) {
     sequence           = if (length(top_seq)) top_seq else NA,
     isolation_source   = get_q("isolation_source"),
     host               = get_q("host"),
+    geo_loc_name       = get_q("geo_loc_name"),
     country            = get_q("country"),
     lat_lon            = get_q("lat_lon"),
     collection_date    = get_q("collection_date"),
@@ -468,11 +3782,1593 @@ fetch_metadata_for_accession <- function(accession) {
   out
 }
 
+
+parse_biosample_node <- function(
+    biosample_node
+) {
+  
+  # ============================================================
+  # Small XML helpers
+  # ============================================================
+  
+  xml_attr <- function(
+    node,
+    attribute,
+    default = NA_character_
+  ) {
+    
+    attrs <- XML::xmlAttrs(
+      node
+    )
+    
+    
+    if (
+      is.null(attrs) ||
+      !attribute %in%
+      names(attrs)
+    ) {
+      return(default)
+    }
+    
+    
+    value <- as.character(
+      attrs[[attribute]]
+    )
+    
+    
+    if (
+      length(value) == 0 ||
+      is.na(value) ||
+      !nzchar(value)
+    ) {
+      return(default)
+    }
+    
+    
+    value
+  }
+  
+  
+  xml_first_value <- function(
+    node,
+    path,
+    default = NA_character_
+  ) {
+    
+    hits <- XML::getNodeSet(
+      node,
+      path
+    )
+    
+    
+    if (length(hits) == 0) {
+      return(default)
+    }
+    
+    
+    value <- XML::xmlValue(
+      hits[[1]]
+    )
+    
+    
+    if (
+      is.null(value) ||
+      length(value) == 0 ||
+      !nzchar(trimws(value))
+    ) {
+      return(default)
+    }
+    
+    
+    trimws(
+      as.character(value)
+    )
+  }
+  
+  
+  normalize_attribute_name <- function(
+    x
+  ) {
+    
+    x <- tolower(
+      trimws(
+        as.character(x)
+      )
+    )
+    
+    
+    x <- gsub(
+      "[^a-z0-9]+",
+      "_",
+      x
+    )
+    
+    
+    x <- gsub(
+      "^_+|_+$",
+      "",
+      x
+    )
+    
+    
+    x
+  }
+  
+  
+  # ============================================================
+  # Basic BioSample information
+  # ============================================================
+  
+  biosample_accession <- xml_attr(
+    biosample_node,
+    "accession"
+  )
+  
+  
+  biosample_id <- xml_attr(
+    biosample_node,
+    "id"
+  )
+  
+  
+  biosample_access <- xml_attr(
+    biosample_node,
+    "access"
+  )
+  
+  
+  submission_date <- xml_attr(
+    biosample_node,
+    "submission_date"
+  )
+  
+  
+  publication_date <- xml_attr(
+    biosample_node,
+    "publication_date"
+  )
+  
+  
+  last_update <- xml_attr(
+    biosample_node,
+    "last_update"
+  )
+  
+  
+  title <- xml_first_value(
+    biosample_node,
+    "./Description/Title"
+  )
+  
+  
+  owner <- xml_first_value(
+    biosample_node,
+    "./Owner/Name"
+  )
+  
+  
+  package <- xml_first_value(
+    biosample_node,
+    "./Package"
+  )
+  
+  
+  description_nodes <- XML::getNodeSet(
+    biosample_node,
+    "./Description/Comment/Paragraph"
+  )
+  
+  
+  biosample_description <- if (
+    length(description_nodes) > 0
+  ) {
+    
+    description_values <- vapply(
+      description_nodes,
+      XML::xmlValue,
+      character(1)
+    )
+    
+    
+    description_values <- unique(
+      trimws(
+        description_values[
+          nzchar(
+            trimws(
+              description_values
+            )
+          )
+        ]
+      )
+    )
+    
+    
+    if (
+      length(description_values) > 0
+    ) {
+      
+      paste(
+        description_values,
+        collapse = "; "
+      )
+      
+    } else {
+      NA_character_
+    }
+    
+  } else {
+    NA_character_
+  }
+  
+  
+  # ============================================================
+  # Organism
+  # ============================================================
+  
+  organism_nodes <- XML::getNodeSet(
+    biosample_node,
+    "./Description/Organism"
+  )
+  
+  
+  if (
+    length(organism_nodes) > 0
+  ) {
+    
+    organism_node <-
+      organism_nodes[[1]]
+    
+    
+    organism <- xml_attr(
+      organism_node,
+      "taxonomy_name"
+    )
+    
+    
+    taxid <- xml_attr(
+      organism_node,
+      "taxonomy_id"
+    )
+    
+  } else {
+    
+    organism <- NA_character_
+    taxid <- NA_character_
+  }
+  
+  
+  # ============================================================
+  # Models
+  # ============================================================
+  
+  model_nodes <- XML::getNodeSet(
+    biosample_node,
+    "./Models/Model"
+  )
+  
+  
+  biosample_models <- if (
+    length(model_nodes) > 0
+  ) {
+    
+    model_values <- vapply(
+      model_nodes,
+      XML::xmlValue,
+      character(1)
+    )
+    
+    
+    model_values <- unique(
+      trimws(
+        model_values[
+          nzchar(
+            trimws(
+              model_values
+            )
+          )
+        ]
+      )
+    )
+    
+    
+    paste(
+      model_values,
+      collapse = "; "
+    )
+    
+  } else {
+    NA_character_
+  }
+  
+  
+  # ============================================================
+  # Other identifiers
+  # ============================================================
+  
+  id_nodes <- XML::getNodeSet(
+    biosample_node,
+    "./Ids/Id"
+  )
+  
+  
+  biosample_other_ids <- if (
+    length(id_nodes) > 0
+  ) {
+    
+    id_pairs <- vapply(
+      id_nodes,
+      function(node) {
+        
+        db_name <- xml_attr(
+          node,
+          "db",
+          default = ""
+        )
+        
+        
+        id_value <- trimws(
+          XML::xmlValue(
+            node
+          )
+        )
+        
+        
+        if (nzchar(db_name)) {
+          
+          paste0(
+            db_name,
+            "=",
+            id_value
+          )
+          
+        } else {
+          id_value
+        }
+      },
+      character(1)
+    )
+    
+    
+    id_pairs <- unique(
+      id_pairs[
+        nzchar(id_pairs)
+      ]
+    )
+    
+    
+    paste(
+      id_pairs,
+      collapse = "; "
+    )
+    
+  } else {
+    NA_character_
+  }
+  
+  
+  # ============================================================
+  # BioSample attributes
+  # ============================================================
+  
+  attribute_nodes <- XML::getNodeSet(
+    biosample_node,
+    "./Attributes/Attribute"
+  )
+  
+  
+  if (
+    length(attribute_nodes) > 0
+  ) {
+    
+    attribute_rows <- lapply(
+      attribute_nodes,
+      function(node) {
+        
+        original_name <- xml_attr(
+          node,
+          "attribute_name",
+          default = ""
+        )
+        
+        
+        harmonized_name <- xml_attr(
+          node,
+          "harmonized_name",
+          default = ""
+        )
+        
+        
+        value <- trimws(
+          XML::xmlValue(
+            node
+          )
+        )
+        
+        
+        preferred_name <- if (
+          nzchar(harmonized_name)
+        ) {
+          harmonized_name
+        } else {
+          original_name
+        }
+        
+        
+        data.frame(
+          original_name =
+            original_name,
+          harmonized_name =
+            harmonized_name,
+          preferred_name =
+            preferred_name,
+          normalized_original =
+            normalize_attribute_name(
+              original_name
+            ),
+          normalized_preferred =
+            normalize_attribute_name(
+              preferred_name
+            ),
+          value =
+            value,
+          stringsAsFactors = FALSE
+        )
+      }
+    )
+    
+    
+    attributes <- dplyr::bind_rows(
+      attribute_rows
+    )
+    
+    
+  } else {
+    
+    attributes <- data.frame(
+      original_name = character(0),
+      harmonized_name = character(0),
+      preferred_name = character(0),
+      normalized_original = character(0),
+      normalized_preferred = character(0),
+      value = character(0),
+      stringsAsFactors = FALSE
+    )
+  }
+  
+  
+  # ============================================================
+  # Get one or more BioSample attribute values
+  # ============================================================
+  
+  get_biosample_attribute <- function(
+    names_to_find
+  ) {
+    
+    if (
+      nrow(attributes) == 0
+    ) {
+      return("")
+    }
+    
+    
+    keys <- normalize_attribute_name(
+      names_to_find
+    )
+    
+    
+    hit <- (
+      attributes$normalized_preferred %in%
+        keys
+    ) |
+      (
+        attributes$normalized_original %in%
+          keys
+      )
+    
+    
+    values <- attributes$value[
+      hit
+    ]
+    
+    
+    values <- unique(
+      trimws(
+        values[
+          !is.na(values) &
+            nzchar(
+              trimws(values)
+            )
+        ]
+      )
+    )
+    
+    # BioSample placeholder values should be treated as missing data
+    missing_values <- c(
+      "missing",
+      "not provided",
+      "not collected",
+      "not applicable",
+      "not available",
+      "unknown",
+      "na",
+      "n/a"
+    )
+    
+    values <- values[
+      !tolower(values) %in% missing_values
+    ]
+    
+    
+    if (length(values) == 0) {
+      return("")
+    }
+    
+    
+    paste(
+      values,
+      collapse = "; "
+    )
+  }
+  
+  
+  # ============================================================
+  # Preserve every attribute in one human-readable column
+  # ============================================================
+  
+  all_attributes <- if (
+    nrow(attributes) > 0
+  ) {
+    
+    attribute_pairs <- paste0(
+      attributes$preferred_name,
+      "=",
+      attributes$value
+    )
+    
+    
+    attribute_pairs <- unique(
+      attribute_pairs[
+        nzchar(
+          attributes$preferred_name
+        )
+      ]
+    )
+    
+    
+    paste(
+      attribute_pairs,
+      collapse = " | "
+    )
+    
+  } else {
+    ""
+  }
+  
+  
+  # ============================================================
+  # Flat aRborist-compatible row
+  # ============================================================
+  
+  out <- data.frame(
+    Accession =
+      biosample_accession,
+    
+    EntrezUID =
+      biosample_id,
+    
+    ncbi_database =
+      "biosample",
+    
+    accession_title =
+      title,
+    
+    organism =
+      organism,
+    
+    TaxID =
+      taxid,
+    
+    BioSample_access =
+      biosample_access,
+    
+    BioSample_submission_date =
+      submission_date,
+    
+    BioSample_publication_date =
+      publication_date,
+    
+    BioSample_last_update =
+      last_update,
+    
+    BioSample_owner =
+      owner,
+    
+    BioSample_package =
+      package,
+    
+    BioSample_models =
+      biosample_models,
+    
+    BioSample_description =
+      biosample_description,
+    
+    BioSample_other_ids =
+      biosample_other_ids,
+    
+    sample_name =
+      get_biosample_attribute(
+        "sample_name"
+      ),
+    
+    sample_type =
+      get_biosample_attribute(
+        "sample_type"
+      ),
+    
+    strain =
+      get_biosample_attribute(
+        "strain"
+      ),
+    
+    isolate =
+      get_biosample_attribute(
+        "isolate"
+      ),
+    
+    host =
+      get_biosample_attribute(
+        "host"
+      ),
+    
+    host_taxid =
+      get_biosample_attribute(
+        "host_taxid"
+      ),
+    
+    host_disease =
+      get_biosample_attribute(
+        "host_disease"
+      ),
+    
+    isolation_source =
+      get_biosample_attribute(
+        "isolation_source"
+      ),
+    
+    collection_date =
+      get_biosample_attribute(
+        "collection_date"
+      ),
+    
+    geo_loc_name =
+      get_biosample_attribute(
+        c(
+          "geo_loc_name"
+        )
+      ),
+    
+    country =
+      get_biosample_attribute(
+        "country"
+      ),
+    
+    lat_lon =
+      get_biosample_attribute(
+        "lat_lon"
+      ),
+    
+    tissue =
+      get_biosample_attribute(
+        "tissue"
+      ),
+    
+    culture_collection =
+      get_biosample_attribute(
+        "culture_collection"
+      ),
+    
+    specimen_voucher =
+      get_biosample_attribute(
+        c(
+          "specimen_voucher",
+          "specimen voucher"
+        )
+      ),
+    
+    type_material =
+      get_biosample_attribute(
+        "type_material"
+      ),
+    
+    identified_by =
+      get_biosample_attribute(
+        "identified_by"
+      ),
+    
+    BioSample_all_attributes =
+      all_attributes,
+    
+    stringsAsFactors = FALSE
+  )
+  
+  
+  out
+}
+
+retry_failed_metadata_accessions <- function(
+    checkpoint_dir = "./metadata_files/metadata_checkpoints",
+    metadata_batch_size = 250,
+    max_retry_passes = 2,
+    ncbi_database = get0(
+      "ncbi_database",
+      envir = .GlobalEnv,
+      ifnotfound = default_ncbi_database
+    )
+) {
+  
+  ncbi_database <- normalize_ncbi_database(
+    ncbi_database
+  )
+  
+  if (
+    ncbi_database == "biosample" &&
+    identical(
+      checkpoint_dir,
+      "./metadata_files/metadata_checkpoints"
+    )
+  ) {
+    
+    checkpoint_dir <-
+      "./metadata_files/metadata_checkpoints_biosample"
+  }
+  
+  failed_path <- file.path(
+    checkpoint_dir,
+    "metadata_failed_accessions.csv"
+  )
+  
+  recovered_path <- file.path(
+    checkpoint_dir,
+    "metadata_failed_accessions_recovered.csv"
+  )
+  
+  normalize_accession <- function(x) {
+    x <- trimws(as.character(x))
+    sub("\\.[0-9]+$", "", x)
+  }
+  
+  
+  # ------------------------------------------------------------
+  # Nothing to retry
+  # ------------------------------------------------------------
+  
+  if (!file.exists(failed_path)) {
+    message("\nNo failed-accession file found. No metadata retries needed.")
+    return(invisible(NULL))
+  }
+  
+  failed_df <- read.csv(
+    failed_path,
+    stringsAsFactors = FALSE,
+    colClasses = "character"
+  )
+  
+  if (
+    nrow(failed_df) == 0 ||
+    !"Accession" %in% names(failed_df)
+  ) {
+    message("\nNo failed accessions remain. No metadata retries needed.")
+    return(invisible(NULL))
+  }
+  
+  
+  # ------------------------------------------------------------
+  # Collapse duplicate failure entries
+  # ------------------------------------------------------------
+  
+  failed_df$Accession_normalized <- normalize_accession(
+    failed_df$Accession
+  )
+  
+  failed_df <- failed_df[
+    !is.na(failed_df$Accession_normalized) &
+      nzchar(failed_df$Accession_normalized),
+    ,
+    drop = FALSE
+  ]
+  
+  failed_df <- failed_df[
+    !duplicated(failed_df$Accession_normalized),
+    ,
+    drop = FALSE
+  ]
+  
+  
+  # ------------------------------------------------------------
+  # Determine which failed accessions may already exist in
+  # completed metadata checkpoints
+  # ------------------------------------------------------------
+  
+  checkpoint_files <- list.files(
+    checkpoint_dir,
+    pattern = "^metadata_.*\\.csv$",
+    full.names = TRUE
+  )
+  
+  checkpoint_files <- checkpoint_files[
+    !grepl(
+      "metadata_failed_accessions\\.csv$",
+      checkpoint_files
+    )
+  ]
+  
+  already_recovered <- character(0)
+  
+  for (checkpoint_file in checkpoint_files) {
+    
+    this_checkpoint <- tryCatch(
+      {
+        read.csv(
+          checkpoint_file,
+          stringsAsFactors = FALSE,
+          colClasses = "character"
+        )
+      },
+      error = function(e) {
+        NULL
+      }
+    )
+    
+    if (
+      is.null(this_checkpoint) ||
+      nrow(this_checkpoint) == 0
+    ) {
+      next
+    }
+    
+    accession_col <- if (
+      "GBSeq_accession.version" %in% names(this_checkpoint)
+    ) {
+      "GBSeq_accession.version"
+    } else if (
+      "Accession" %in% names(this_checkpoint)
+    ) {
+      "Accession"
+    } else {
+      NULL
+    }
+    
+    if (!is.null(accession_col)) {
+      
+      already_recovered <- c(
+        already_recovered,
+        normalize_accession(
+          this_checkpoint[[accession_col]]
+        )
+      )
+    }
+  }
+  
+  already_recovered <- unique(
+    already_recovered[
+      !is.na(already_recovered) &
+        nzchar(already_recovered)
+    ]
+  )
+  
+  if (length(already_recovered) > 0) {
+    
+    before_n <- nrow(failed_df)
+    
+    failed_df <- failed_df[
+      !failed_df$Accession_normalized %in% already_recovered,
+      ,
+      drop = FALSE
+    ]
+    
+    removed_n <- before_n - nrow(failed_df)
+    
+    if (removed_n > 0) {
+      message(
+        "\nRemoved ",
+        removed_n,
+        " accession(s) from the failure list because metadata already exists."
+      )
+    }
+  }
+  
+  
+  # ------------------------------------------------------------
+  # If everything was already recovered
+  # ------------------------------------------------------------
+  
+  if (nrow(failed_df) == 0) {
+    
+    empty_failed <- data.frame(
+      Taxon = character(),
+      Accession = character(),
+      Error = character(),
+      Time = character(),
+      stringsAsFactors = FALSE
+    )
+    
+    write.csv(
+      empty_failed,
+      failed_path,
+      row.names = FALSE
+    )
+    
+    message("\nAll previously failed accessions already have metadata.")
+    
+    return(invisible(NULL))
+  }
+  
+  
+  # ------------------------------------------------------------
+  # Recursive retrieval helper
+  #
+  # Try the whole batch first.
+  # If it errors, divide the batch in half.
+  # Continue until successful or down to one accession.
+  # ------------------------------------------------------------
+  
+  fetch_with_fallback <- function(accessions) {
+    
+    accessions <- unique(
+      trimws(as.character(accessions))
+    )
+    
+    accessions <- accessions[
+      !is.na(accessions) &
+        nzchar(accessions)
+    ]
+    
+    if (length(accessions) == 0) {
+      
+      return(
+        list(
+          metadata = NULL,
+          failed = data.frame(
+            Accession = character(),
+            Error = character(),
+            stringsAsFactors = FALSE
+          )
+        )
+      )
+    }
+    
+    
+    # ----------------------------------------------------------
+    # Individual accession
+    # ----------------------------------------------------------
+    
+    if (length(accessions) == 1) {
+      
+      acc <- accessions[1]
+      
+      entry <- tryCatch(
+        {
+          fetch_metadata_for_accession(
+            acc,
+            ncbi_database = ncbi_database
+          )
+        },
+        error = function(e) {
+          
+          return(
+            structure(
+              NULL,
+              retrieval_error = conditionMessage(e)
+            )
+          )
+        }
+      )
+      
+      if (is.null(entry)) {
+        
+        err <- attr(
+          entry,
+          "retrieval_error"
+        )
+        
+        if (
+          is.null(err) ||
+          !nzchar(err)
+        ) {
+          err <- "Metadata retrieval failed."
+        }
+        
+        return(
+          list(
+            metadata = NULL,
+            failed = data.frame(
+              Accession = acc,
+              Error = err,
+              stringsAsFactors = FALSE
+            )
+          )
+        )
+      }
+      
+      return(
+        list(
+          metadata = entry,
+          failed = data.frame(
+            Accession = character(),
+            Error = character(),
+            stringsAsFactors = FALSE
+          )
+        )
+      )
+    }
+    
+    
+    # ----------------------------------------------------------
+    # Attempt batch
+    # ----------------------------------------------------------
+    
+    batch_result <- tryCatch(
+      {
+        fetch_metadata_for_accession_batch(
+          accessions,
+          ncbi_database = ncbi_database
+        )
+      },
+      error = function(e) {
+        NULL
+      }
+    )
+    
+    
+    # ----------------------------------------------------------
+    # Batch succeeded
+    # ----------------------------------------------------------
+    
+    if (
+      !is.null(batch_result) &&
+      nrow(batch_result) > 0
+    ) {
+      
+      returned_col <- if (
+        "GBSeq_accession.version" %in% names(batch_result)
+      ) {
+        "GBSeq_accession.version"
+      } else {
+        "Accession"
+      }
+      
+      returned <- normalize_accession(
+        batch_result[[returned_col]]
+      )
+      
+      requested <- normalize_accession(
+        accessions
+      )
+      
+      missing <- accessions[
+        !requested %in% returned
+      ]
+      
+      
+      # Everything returned
+      if (length(missing) == 0) {
+        
+        return(
+          list(
+            metadata = batch_result,
+            failed = data.frame(
+              Accession = character(),
+              Error = character(),
+              stringsAsFactors = FALSE
+            )
+          )
+        )
+      }
+      
+      
+      # Some records were omitted by NCBI.
+      # Retry only the omitted accessions.
+      missing_result <- fetch_with_fallback(
+        missing
+      )
+      
+      combined_metadata <- batch_result
+      
+      if (!is.null(missing_result$metadata)) {
+        
+        combined_metadata <- plyr::rbind.fill(
+          list(
+            combined_metadata,
+            missing_result$metadata
+          )
+        )
+      }
+      
+      return(
+        list(
+          metadata = combined_metadata,
+          failed = missing_result$failed
+        )
+      )
+    }
+    
+    
+    # ----------------------------------------------------------
+    # Batch failed completely:
+    # divide it and retry smaller batches
+    # ----------------------------------------------------------
+    
+    midpoint <- floor(
+      length(accessions) / 2
+    )
+    
+    left_accessions <- accessions[
+      seq_len(midpoint)
+    ]
+    
+    right_accessions <- accessions[
+      (midpoint + 1):length(accessions)
+    ]
+    
+    left_result <- fetch_with_fallback(
+      left_accessions
+    )
+    
+    Sys.sleep(
+      get_sleep_duration()
+    )
+    
+    right_result <- fetch_with_fallback(
+      right_accessions
+    )
+    
+    
+    combined_metadata <- NULL
+    
+    metadata_parts <- list()
+    
+    if (!is.null(left_result$metadata)) {
+      metadata_parts[[length(metadata_parts) + 1L]] <-
+        left_result$metadata
+    }
+    
+    if (!is.null(right_result$metadata)) {
+      metadata_parts[[length(metadata_parts) + 1L]] <-
+        right_result$metadata
+    }
+    
+    if (length(metadata_parts) > 0) {
+      combined_metadata <- plyr::rbind.fill(
+        metadata_parts
+      )
+    }
+    
+    combined_failed <- rbind(
+      left_result$failed,
+      right_result$failed
+    )
+    
+    list(
+      metadata = combined_metadata,
+      failed = combined_failed
+    )
+  }
+  
+  
+  # ============================================================
+  # RETRY PASSES
+  # ============================================================
+  
+  for (retry_pass in seq_len(max_retry_passes)) {
+    
+    if (nrow(failed_df) == 0) {
+      break
+    }
+    
+    message(
+      "\n============================================================"
+    )
+    
+    message(
+      "FAILED METADATA RETRY PASS ",
+      retry_pass,
+      " / ",
+      max_retry_passes
+    )
+    
+    message(
+      "Retrying ",
+      nrow(failed_df),
+      " unique accession(s)."
+    )
+    
+    message(
+      "============================================================\n"
+    )
+    
+    retry_accessions <- failed_df$Accession
+    
+    retry_batches <- split(
+      retry_accessions,
+      ceiling(
+        seq_along(retry_accessions) /
+          metadata_batch_size
+      )
+    )
+    
+    recovered_this_pass <- list()
+    failures_this_pass <- list()
+    
+    num_batches <- length(
+      retry_batches
+    )
+    
+    
+    for (batch_index in seq_along(retry_batches)) {
+      
+      accession_batch <- unname(
+        retry_batches[[batch_index]]
+      )
+      
+      message(
+        "Retry pass ",
+        retry_pass,
+        " | batch ",
+        batch_index,
+        " / ",
+        num_batches,
+        " | ",
+        length(accession_batch),
+        " accession(s)"
+      )
+      
+      retry_result <- fetch_with_fallback(
+        accession_batch
+      )
+      
+      
+      if (!is.null(retry_result$metadata)) {
+        
+        recovered_this_pass[[
+          length(recovered_this_pass) + 1L
+        ]] <- retry_result$metadata
+      }
+      
+      
+      if (
+        !is.null(retry_result$failed) &&
+        nrow(retry_result$failed) > 0
+      ) {
+        
+        failures_this_pass[[
+          length(failures_this_pass) + 1L
+        ]] <- retry_result$failed
+      }
+      
+      Sys.sleep(
+        get_sleep_duration()
+      )
+    }
+    
+    
+    # ----------------------------------------------------------
+    # Save recovered records
+    # ----------------------------------------------------------
+    
+    recovered_df <- NULL
+    
+    if (length(recovered_this_pass) > 0) {
+      
+      recovered_df <- plyr::rbind.fill(
+        recovered_this_pass
+      )
+      
+      accession_col <- if (
+        "GBSeq_accession.version" %in% names(recovered_df)
+      ) {
+        "GBSeq_accession.version"
+      } else {
+        "Accession"
+      }
+      
+      recovered_df$.normalized_accession <-
+        normalize_accession(
+          recovered_df[[accession_col]]
+        )
+      
+      recovered_df <- recovered_df[
+        !duplicated(
+          recovered_df$.normalized_accession
+        ),
+        ,
+        drop = FALSE
+      ]
+      
+      recovered_df$.normalized_accession <- NULL
+      
+      
+      if (file.exists(recovered_path)) {
+        
+        existing_recovered <- read.csv(
+          recovered_path,
+          stringsAsFactors = FALSE,
+          colClasses = "character"
+        )
+        
+        recovered_df <- plyr::rbind.fill(
+          list(
+            existing_recovered,
+            recovered_df
+          )
+        )
+        
+        accession_col <- if (
+          "GBSeq_accession.version" %in% names(recovered_df)
+        ) {
+          "GBSeq_accession.version"
+        } else {
+          "Accession"
+        }
+        
+        recovered_df$.normalized_accession <-
+          normalize_accession(
+            recovered_df[[accession_col]]
+          )
+        
+        recovered_df <- recovered_df[
+          !duplicated(
+            recovered_df$.normalized_accession
+          ),
+          ,
+          drop = FALSE
+        ]
+        
+        recovered_df$.normalized_accession <- NULL
+      }
+      
+      
+      write.csv(
+        recovered_df,
+        recovered_path,
+        row.names = FALSE
+      )
+    }
+    
+    
+    # ----------------------------------------------------------
+    # Determine what still failed
+    # ----------------------------------------------------------
+    
+    if (length(failures_this_pass) > 0) {
+      
+      remaining_failures <- do.call(
+        rbind,
+        failures_this_pass
+      )
+      
+      remaining_failures$Accession_normalized <-
+        normalize_accession(
+          remaining_failures$Accession
+        )
+      
+      remaining_failures <- remaining_failures[
+        !duplicated(
+          remaining_failures$Accession_normalized
+        ),
+        ,
+        drop = FALSE
+      ]
+      
+      
+      original_taxon_map <- failed_df[
+        !duplicated(
+          failed_df$Accession_normalized
+        ),
+        c(
+          "Accession_normalized",
+          "Taxon"
+        ),
+        drop = FALSE
+      ]
+      
+      remaining_failures <- merge(
+        remaining_failures,
+        original_taxon_map,
+        by = "Accession_normalized",
+        all.x = TRUE,
+        sort = FALSE
+      )
+      
+      failed_df <- data.frame(
+        Taxon = remaining_failures$Taxon,
+        Accession = remaining_failures$Accession,
+        Error = remaining_failures$Error,
+        Time = format(
+          Sys.time(),
+          "%Y-%m-%d %H:%M:%S"
+        ),
+        Accession_normalized =
+          remaining_failures$Accession_normalized,
+        stringsAsFactors = FALSE
+      )
+      
+    } else {
+      
+      failed_df <- data.frame(
+        Taxon = character(),
+        Accession = character(),
+        Error = character(),
+        Time = character(),
+        Accession_normalized = character(),
+        stringsAsFactors = FALSE
+      )
+    }
+    
+    
+    # ----------------------------------------------------------
+    # Rewrite the failure log after every pass
+    # ----------------------------------------------------------
+    
+    failed_to_write <- failed_df
+    
+    failed_to_write$Accession_normalized <- NULL
+    
+    write.csv(
+      failed_to_write,
+      failed_path,
+      row.names = FALSE
+    )
+    
+    
+    recovered_count <- length(
+      retry_accessions
+    ) - nrow(
+      failed_df
+    )
+    
+    message(
+      "\nRetry pass ",
+      retry_pass,
+      " complete."
+    )
+    
+    message(
+      "  Recovered: ",
+      recovered_count
+    )
+    
+    message(
+      "  Still failed: ",
+      nrow(failed_df)
+    )
+    
+    
+    if (nrow(failed_df) == 0) {
+      
+      message(
+        "\nAll failed metadata accessions were recovered."
+      )
+      
+      break
+    }
+  }
+  
+  
+  # ============================================================
+  # FINAL STATUS
+  # ============================================================
+  
+  if (nrow(failed_df) > 0) {
+    
+    message(
+      "\nMetadata retry limit reached."
+    )
+    
+    message(
+      nrow(failed_df),
+      " accession(s) still failed after ",
+      max_retry_passes,
+      " retry pass(es)."
+    )
+    
+    message(
+      "No additional automatic retries will be attempted."
+    )
+    
+  } else {
+    
+    message(
+      "\nNo unresolved failed metadata accessions remain."
+    )
+  }
+  
+  
+  invisible(
+    failed_df
+  )
+}
+
+# Metadata retrieval, using list of pulled accessions
+fetch_metadata_for_accession <- function(
+    accession,
+    ncbi_database = get0(
+      "ncbi_database",
+      envir = .GlobalEnv,
+      ifnotfound = default_ncbi_database
+    )
+) {
+  
+  result <- fetch_metadata_for_accession_batch(
+    accessions = accession,
+    ncbi_database = ncbi_database
+  )
+  
+  
+  if (
+    is.null(result) ||
+    nrow(result) == 0
+  ) {
+    return(NULL)
+  }
+  
+  
+  result[
+    1,
+    ,
+    drop = FALSE
+  ]
+}
+
 # metadata retrieval
-retrieve_ncbi_metadata <- function(project_name,
-                                   resume = TRUE,
-                                   overwrite_checkpoints = FALSE,
-                                   checkpoint_dir = "./metadata_files/metadata_checkpoints") {
+retrieve_ncbi_metadata <- function(
+    project_name,
+    resume = TRUE,
+    overwrite_checkpoints = FALSE,
+    checkpoint_dir = "./metadata_files/metadata_checkpoints",
+    ncbi_database = get0(
+      "ncbi_database",
+      envir = .GlobalEnv,
+      ifnotfound = default_ncbi_database
+    ),
+    checkpoint_every = 500,
+    progress_every = 50,
+    metadata_batch_size = 250,
+    batch_max_retries = 2,
+    batch_retry_wait = 5,
+    min_batch_size = 1,
+    failed_retry_passes = 2
+) {
+  
+  # ============================================================
+  # Resolve NCBI database
+  # ============================================================
+  
+  ncbi_database <- normalize_ncbi_database(
+    ncbi_database
+  )
+  
+  
+  # Keep the existing metadata checkpoint directory for
+  # Nucleotide searches, but use a separate directory for
+  # BioSample searches so the two databases cannot accidentally
+  # reuse each other's checkpoints.
+  if (
+    ncbi_database == "biosample" &&
+    identical(
+      checkpoint_dir,
+      "./metadata_files/metadata_checkpoints"
+    )
+  ) {
+    
+    checkpoint_dir <-
+      "./metadata_files/metadata_checkpoints_biosample"
+  }
+  
+  
+  message(
+    "\nNCBI metadata source: ",
+    ncbi_database
+  )
   
   accession_path <- "./intermediate_files/all_pulled_accessions.csv"
   
@@ -488,28 +5384,149 @@ retrieve_ncbi_metadata <- function(project_name,
     dir.create(checkpoint_dir, recursive = TRUE)
   }
   
-  accession_list <- read.csv(accession_path, header = TRUE, stringsAsFactors = FALSE)
+  accession_list <- read.csv(
+    accession_path,
+    header = TRUE,
+    stringsAsFactors = FALSE
+  )
   
   if (!"Accession" %in% names(accession_list)) {
     stop("Accession list must contain an 'Accession' column.")
   }
   
-  if ("genus" %in% names(accession_list)) {
-    taxa_groups <- split(accession_list, accession_list$genus)
-  } else {
-    taxa_groups <- list(ALL = accession_list)
+  # ============================================================
+  # Normalize accession versions for matching
+  # ============================================================
+  
+  normalize_accession <- function(x) {
+    x <- trimws(as.character(x))
+    sub("\\.[0-9]+$", "", x)
   }
   
-  failed_path <- file.path(checkpoint_dir, "metadata_failed_accessions.csv")
+  # ============================================================
+  # Split metadata retrieval into search groups
+  # ============================================================
+  
+  if ("search_group" %in% names(accession_list)) {
+    
+    taxa_groups <- split(
+      accession_list,
+      accession_list$search_group
+    )
+    
+  } else if ("genus" %in% names(accession_list)) {
+    
+    message(
+      "Using legacy 'genus' column as the metadata checkpoint group."
+    )
+    
+    taxa_groups <- split(
+      accession_list,
+      accession_list$genus
+    )
+    
+  } else {
+    
+    taxa_groups <- list(
+      ALL = accession_list
+    )
+  }
+  
+  # ============================================================
+  # Output / logging paths
+  # ============================================================
+  
+  failed_path <- file.path(
+    checkpoint_dir,
+    "metadata_failed_accessions.csv"
+  )
+  
+  recovered_failed_path <- file.path(
+    checkpoint_dir,
+    "metadata_failed_accessions_recovered.csv"
+  )
+  
   timing_path <- "./intermediate_files/fetch_times_metadata_by_taxon.csv"
   
-  failed_log <- data.frame(
-    Taxon = character(),
-    Accession = character(),
-    Error = character(),
-    Time = character(),
-    stringsAsFactors = FALSE
-  )
+  # ------------------------------------------------------------
+  # Preserve an existing failure log when resuming
+  #
+  # This is important when all normal search-group checkpoints
+  # already exist and we only want to retry prior failures.
+  # ------------------------------------------------------------
+  
+  if (
+    resume &&
+    !overwrite_checkpoints &&
+    file.exists(failed_path)
+  ) {
+    
+    failed_log <- read.csv(
+      failed_path,
+      stringsAsFactors = FALSE,
+      colClasses = "character"
+    )
+    
+    required_failed_columns <- c(
+      "Taxon",
+      "Accession",
+      "Error",
+      "Time"
+    )
+    
+    missing_failed_columns <- setdiff(
+      required_failed_columns,
+      names(failed_log)
+    )
+    
+    if (length(missing_failed_columns) > 0) {
+      stop(
+        "Existing failed accession file is missing column(s): ",
+        paste(
+          missing_failed_columns,
+          collapse = ", "
+        )
+      )
+    }
+    
+    failed_log <- failed_log[
+      !is.na(failed_log$Accession) &
+        nzchar(failed_log$Accession),
+      ,
+      drop = FALSE
+    ]
+    
+    if (nrow(failed_log) > 0) {
+      
+      failed_log$.normalized_accession <- normalize_accession(
+        failed_log$Accession
+      )
+      
+      failed_log <- failed_log[
+        !duplicated(failed_log$.normalized_accession),
+        ,
+        drop = FALSE
+      ]
+      
+      failed_log$.normalized_accession <- NULL
+    }
+    
+    message(
+      "\nLoaded ",
+      nrow(failed_log),
+      " previously failed accession(s) for possible retry."
+    )
+    
+  } else {
+    
+    failed_log <- data.frame(
+      Taxon = character(),
+      Accession = character(),
+      Error = character(),
+      Time = character(),
+      stringsAsFactors = FALSE
+    )
+  }
   
   timing_log <- data.frame(
     Taxon = character(),
@@ -533,94 +5550,551 @@ retrieve_ncbi_metadata <- function(project_name,
     " taxon group(s)."
   )
   
+  # ============================================================
+  # Process each search group
+  # ============================================================
+  
   for (tx in names(taxa_groups)) {
     
-    safe_tx <- gsub("[^A-Za-z0-9_.-]+", "_", tx)
+    safe_tx <- gsub(
+      "[^A-Za-z0-9_.-]+",
+      "_",
+      tx
+    )
     
     checkpoint_path <- file.path(
       checkpoint_dir,
       paste0("metadata_", safe_tx, ".csv")
     )
     
+    partial_checkpoint_path <- file.path(
+      checkpoint_dir,
+      paste0("metadata_", safe_tx, ".partial.csv")
+    )
+    
     block <- taxa_groups[[tx]]
     
-    if (file.exists(checkpoint_path) && resume && !overwrite_checkpoints) {
-      message("\n--- Skipping ", tx, ": checkpoint already exists ---")
+    # ----------------------------------------------------------
+    # Optional checkpoint overwrite
+    # ----------------------------------------------------------
+    
+    if (overwrite_checkpoints) {
+      
+      if (file.exists(checkpoint_path)) {
+        message(
+          "\n--- Removing completed checkpoint for ",
+          tx,
+          " ---"
+        )
+        
+        file.remove(checkpoint_path)
+      }
+      
+      if (file.exists(partial_checkpoint_path)) {
+        message(
+          "\n--- Removing partial checkpoint for ",
+          tx,
+          " ---"
+        )
+        
+        file.remove(partial_checkpoint_path)
+      }
+    }
+    
+    # ----------------------------------------------------------
+    # Skip completed groups
+    # ----------------------------------------------------------
+    
+    if (
+      file.exists(checkpoint_path) &&
+      resume &&
+      !overwrite_checkpoints
+    ) {
+      
+      message(
+        "\n--- Skipping ",
+        tx,
+        ": completed checkpoint already exists ---"
+      )
+      
       next
     }
     
-    if (file.exists(checkpoint_path) && overwrite_checkpoints) {
-      message("\n--- Overwriting existing checkpoint for ", tx, " ---")
-      file.remove(checkpoint_path)
-    }
+    # ----------------------------------------------------------
+    # Resume partial metadata checkpoint
+    # ----------------------------------------------------------
     
-    taxon_start <- Sys.time()
+    completed_accessions <- character(0)
     
-    message("\n--- ", tx, ": ", nrow(block), " accession(s) ---")
-    
-    metadata_rows <- list()
-    success_count <- 0L
-    fail_count <- 0L
-    
-    for (i in seq_len(nrow(block))) {
+    if (
+      file.exists(partial_checkpoint_path) &&
+      resume &&
+      !overwrite_checkpoints
+    ) {
       
-      acc <- block$Accession[i]
-      
-      message("[", i, "/", nrow(block), "] ", acc, " ...")
-      
-      entry <- tryCatch(
-        {
-          fetch_metadata_for_accession(acc)
-        },
-        error = function(e) {
-          fail_count <<- fail_count + 1L
-          
-          failed_log <<- rbind(
-            failed_log,
-            data.frame(
-              Taxon = tx,
-              Accession = acc,
-              Error = conditionMessage(e),
-              Time = format(Sys.time(), "%Y-%m-%d %H:%M:%S"),
-              stringsAsFactors = FALSE
-            )
-          )
-          
-          message("  ERROR: ", conditionMessage(e))
-          NULL
-        }
+      partial_existing <- read.csv(
+        partial_checkpoint_path,
+        stringsAsFactors = FALSE,
+        colClasses = "character"
       )
       
-      if (!is.null(entry)) {
-        success_count <- success_count + 1L
-        metadata_rows[[length(metadata_rows) + 1L]] <- entry
-        
-        message(
-          "  OK | Species: ", entry$organism,
-          " | Strain: ",
-          dplyr::coalesce(entry$strain, entry$specimen_voucher, entry$isolate, ""),
-          " | Host: ", entry$host
+      if (!"Accession" %in% names(partial_existing)) {
+        stop(
+          "Partial metadata checkpoint is missing the Accession column: ",
+          partial_checkpoint_path
         )
       }
       
-      Sys.sleep(get_sleep_duration())
+      checkpoint_accession_col <- if (
+        "GBSeq_accession.version" %in% names(partial_existing)
+      ) {
+        "GBSeq_accession.version"
+      } else {
+        "Accession"
+      }
+      
+      completed_accessions <- unique(
+        partial_existing[[checkpoint_accession_col]][
+          !is.na(partial_existing[[checkpoint_accession_col]]) &
+            partial_existing[[checkpoint_accession_col]] != ""
+        ]
+      )
+      
+      message(
+        "\n--- Resuming ",
+        tx,
+        " from partial checkpoint with ",
+        length(completed_accessions),
+        " completed accession(s) ---"
+      )
     }
     
-    if (length(metadata_rows) > 0) {
-      taxon_metadata <- plyr::rbind.fill(metadata_rows)
-      write.csv(taxon_metadata, checkpoint_path, row.names = FALSE)
-      message("Checkpoint written: ", checkpoint_path)
-    } else {
-      warning("No metadata successfully retrieved for taxon: ", tx)
+    # ----------------------------------------------------------
+    # Match partial checkpoint accessions
+    # ----------------------------------------------------------
+    
+    if (length(completed_accessions) > 0) {
+      
+      completed_accessions_normalized <- normalize_accession(
+        completed_accessions
+      )
+      
+      block_accessions_normalized <- normalize_accession(
+        block$Accession
+      )
+      
+      already_completed <- block_accessions_normalized %in%
+        completed_accessions_normalized
+      
+      message(
+        "Matched ",
+        sum(already_completed),
+        " of ",
+        length(completed_accessions),
+        " completed accession(s) to the current download manifest."
+      )
+      
+      block <- block[
+        !already_completed,
+        ,
+        drop = FALSE
+      ]
     }
+    
+    # ----------------------------------------------------------
+    # Start group
+    # ----------------------------------------------------------
+    
+    taxon_start <- Sys.time()
+    
+    message(
+      "\n--- ",
+      tx,
+      ": ",
+      nrow(block),
+      " accession(s) remaining ---"
+    )
+    
+    metadata_buffer <- list()
+    buffer_success_count <- 0L
+    
+    success_count <- length(completed_accessions)
+    fail_count <- 0L
+    
+    # ----------------------------------------------------------
+    # Split remaining accessions into main metadata batches
+    # ----------------------------------------------------------
+    
+    accession_batches <- split(
+      block$Accession,
+      ceiling(
+        seq_along(block$Accession) /
+          metadata_batch_size
+      )
+    )
+    
+    num_batches <- length(accession_batches)
+    processed_count <- 0L
+    
+    # ==========================================================
+    # Metadata batch loop
+    # ==========================================================
+    
+    for (batch_index in seq_along(accession_batches)) {
+      
+      accession_batch <- unname(
+        accession_batches[[batch_index]]
+      )
+      
+      batch_start_position <- processed_count + 1L
+      
+      batch_end_position <- processed_count +
+        length(accession_batch)
+      
+      # --------------------------------------------------------
+      # Progress reporting
+      # --------------------------------------------------------
+      
+      if (
+        batch_index == 1 ||
+        batch_index %% progress_every == 0 ||
+        batch_index == num_batches
+      ) {
+        
+        message(
+          "[",
+          format_progress(
+            current = batch_end_position,
+            total = nrow(block),
+            start_time = taxon_start
+          ),
+          "] Fetching batch ",
+          batch_index,
+          " / ",
+          num_batches,
+          " (",
+          length(accession_batch),
+          " accession(s))"
+        )
+      }
+      
+      # --------------------------------------------------------
+      # Resilient metadata retrieval
+      # --------------------------------------------------------
+      
+      batch_result <- fetch_metadata_batch_resilient(
+        accessions = accession_batch,
+        min_batch_size = min_batch_size,
+        max_retries = batch_max_retries,
+        retry_wait = batch_retry_wait,
+        ncbi_database = ncbi_database
+      )
+      
+      # --------------------------------------------------------
+      # Add successful metadata rows to buffer
+      # --------------------------------------------------------
+      
+      if (
+        !is.null(batch_result) &&
+        nrow(batch_result) > 0
+      ) {
+        
+        for (row_index in seq_len(nrow(batch_result))) {
+          
+          entry <- batch_result[
+            row_index,
+            ,
+            drop = FALSE
+          ]
+          
+          accession_display <- if (
+            "GBSeq_accession.version" %in% names(entry) &&
+            !is.na(entry$GBSeq_accession.version[1]) &&
+            nzchar(entry$GBSeq_accession.version[1])
+          ) {
+            entry$GBSeq_accession.version[1]
+          } else {
+            entry$Accession[1]
+          }
+          
+          success_count <- success_count + 1L
+          buffer_success_count <- buffer_success_count + 1L
+          
+          metadata_buffer[[length(metadata_buffer) + 1L]] <- entry
+          
+          message(
+            "  OK | ",
+            accession_display,
+            " | Species: ",
+            entry$organism[1],
+            " | Strain: ",
+            dplyr::coalesce(
+              entry$strain[1],
+              entry$specimen_voucher[1],
+              entry$isolate[1],
+              ""
+            ),
+            " | Host: ",
+            entry$host[1]
+          )
+        }
+      }
+      
+      # --------------------------------------------------------
+      # Determine accessions that ultimately were not returned
+      # --------------------------------------------------------
+      
+      returned_accessions <- character(0)
+      
+      if (
+        !is.null(batch_result) &&
+        nrow(batch_result) > 0
+      ) {
+        
+        returned_column <- if (
+          "GBSeq_accession.version" %in%
+          names(batch_result)
+        ) {
+          "GBSeq_accession.version"
+        } else {
+          "Accession"
+        }
+        
+        returned_accessions <- normalize_accession(
+          batch_result[[returned_column]]
+        )
+      }
+      
+      missing_accessions <- accession_batch[
+        !normalize_accession(accession_batch) %in%
+          returned_accessions
+      ]
+      
+      # --------------------------------------------------------
+      # Log only accessions that failed even after progressive
+      # batch subdivision
+      # --------------------------------------------------------
+      
+      if (length(missing_accessions) > 0) {
+        
+        fail_count <- fail_count +
+          length(missing_accessions)
+        
+        missing_rows <- data.frame(
+          Taxon = rep(
+            tx,
+            length(missing_accessions)
+          ),
+          Accession = missing_accessions,
+          Error = rep(
+            paste0(
+              "Accession was not returned after ",
+              "progressive metadata batch retries."
+            ),
+            length(missing_accessions)
+          ),
+          Time = rep(
+            format(
+              Sys.time(),
+              "%Y-%m-%d %H:%M:%S"
+            ),
+            length(missing_accessions)
+          ),
+          stringsAsFactors = FALSE
+        )
+        
+        failed_log <- rbind(
+          failed_log,
+          missing_rows
+        )
+        
+        # Deduplicate the failure log as we go
+        failed_log$.normalized_accession <- normalize_accession(
+          failed_log$Accession
+        )
+        
+        failed_log <- failed_log[
+          !duplicated(
+            failed_log$.normalized_accession,
+            fromLast = TRUE
+          ),
+          ,
+          drop = FALSE
+        ]
+        
+        failed_log$.normalized_accession <- NULL
+        
+        message(
+          "  WARNING: ",
+          length(missing_accessions),
+          " accession(s) were not returned after ",
+          "progressive batch retries."
+        )
+        
+        if (length(missing_accessions) <= 10) {
+          message(
+            "    ",
+            paste(
+              missing_accessions,
+              collapse = ", "
+            )
+          )
+        }
+      }
+      
+      processed_count <- batch_end_position
+      
+      # --------------------------------------------------------
+      # Write partial checkpoint when buffer reaches threshold
+      # --------------------------------------------------------
+      
+      if (buffer_success_count >= checkpoint_every) {
+        
+        metadata_chunk <- plyr::rbind.fill(
+          metadata_buffer
+        )
+        
+        data.table::fwrite(
+          metadata_chunk,
+          partial_checkpoint_path,
+          append = file.exists(
+            partial_checkpoint_path
+          ),
+          col.names = !file.exists(
+            partial_checkpoint_path
+          )
+        )
+        
+        message(
+          "Partial metadata checkpoint updated: ",
+          partial_checkpoint_path,
+          " | ",
+          success_count,
+          " successful accession(s) total"
+        )
+        
+        metadata_buffer <- list()
+        buffer_success_count <- 0L
+        
+        gc()
+      }
+      
+      Sys.sleep(
+        get_sleep_duration()
+      )
+    }
+    
+    # ==========================================================
+    # Flush remaining records
+    # ==========================================================
+    
+    if (length(metadata_buffer) > 0) {
+      
+      metadata_chunk <- plyr::rbind.fill(
+        metadata_buffer
+      )
+      
+      data.table::fwrite(
+        metadata_chunk,
+        partial_checkpoint_path,
+        append = file.exists(
+          partial_checkpoint_path
+        ),
+        col.names = !file.exists(
+          partial_checkpoint_path
+        )
+      )
+      
+      message(
+        "Final partial metadata chunk written: ",
+        partial_checkpoint_path
+      )
+      
+      metadata_buffer <- list()
+      buffer_success_count <- 0L
+      
+      gc()
+    }
+    
+    # ==========================================================
+    # Finalize search-group checkpoint
+    # ==========================================================
+    
+    if (file.exists(partial_checkpoint_path)) {
+      
+      completed_metadata <- read.csv(
+        partial_checkpoint_path,
+        stringsAsFactors = FALSE,
+        colClasses = "character"
+      )
+      
+      completed_metadata <- dplyr::distinct(
+        completed_metadata,
+        Accession,
+        .keep_all = TRUE
+      )
+      
+      write.csv(
+        completed_metadata,
+        checkpoint_path,
+        row.names = FALSE
+      )
+      
+      file.remove(
+        partial_checkpoint_path
+      )
+      
+      message(
+        "Completed metadata checkpoint written: ",
+        checkpoint_path
+      )
+      
+    } else if (file.exists(checkpoint_path)) {
+      
+      message(
+        "Completed checkpoint already exists: ",
+        checkpoint_path
+      )
+      
+    } else {
+      
+      warning(
+        "No metadata successfully retrieved for search group: ",
+        tx
+      )
+    }
+    
+    # ==========================================================
+    # Failed accession log
+    # ==========================================================
     
     if (nrow(failed_log) > 0) {
-      write.csv(failed_log, failed_path, row.names = FALSE)
-      message("Failed accession log written: ", failed_path)
+      
+      write.csv(
+        failed_log,
+        failed_path,
+        row.names = FALSE
+      )
+      
+      message(
+        "Failed accession log written: ",
+        failed_path
+      )
     }
     
+    # ==========================================================
+    # Timing log for this search group
+    # ==========================================================
+    
     taxon_end <- Sys.time()
-    taxon_elapsed <- as.numeric(difftime(taxon_end, taxon_start, units = "mins"))
+    
+    taxon_elapsed <- as.numeric(
+      difftime(
+        taxon_end,
+        taxon_start,
+        units = "mins"
+      )
+    )
     
     timing_log <- rbind(
       timing_log,
@@ -629,15 +6103,28 @@ retrieve_ncbi_metadata <- function(project_name,
         Num_accessions = nrow(block),
         Num_successful = success_count,
         Num_failed = fail_count,
-        Start_time = format(taxon_start, "%Y-%m-%d %H:%M:%S"),
-        End_time = format(taxon_end, "%Y-%m-%d %H:%M:%S"),
-        Elapsed_minutes = round(taxon_elapsed, 2),
+        Start_time = format(
+          taxon_start,
+          "%Y-%m-%d %H:%M:%S"
+        ),
+        End_time = format(
+          taxon_end,
+          "%Y-%m-%d %H:%M:%S"
+        ),
+        Elapsed_minutes = round(
+          taxon_elapsed,
+          2
+        ),
         Checkpoint_file = checkpoint_path,
         stringsAsFactors = FALSE
       )
     )
     
-    write.csv(timing_log, timing_path, row.names = FALSE)
+    write.csv(
+      timing_log,
+      timing_path,
+      row.names = FALSE
+    )
     
     message(
       tx,
@@ -651,6 +6138,570 @@ retrieve_ncbi_metadata <- function(project_name,
     )
   }
   
+  # ============================================================
+  # Retry accessions that failed during normal retrieval
+  #
+  # Pass 1:
+  #   retry every accession currently in the failure log.
+  #
+  # Pass 2:
+  #   retry only the accessions that still failed after pass 1.
+  #
+  # After failed_retry_passes, stop automatically.
+  # ============================================================
+  
+  if (
+    failed_retry_passes > 0 &&
+    file.exists(failed_path)
+  ) {
+    
+    retry_failed_log <- read.csv(
+      failed_path,
+      stringsAsFactors = FALSE,
+      colClasses = "character"
+    )
+    
+    if (
+      "Accession" %in% names(retry_failed_log) &&
+      nrow(retry_failed_log) > 0
+    ) {
+      
+      retry_failed_log <- retry_failed_log[
+        !is.na(retry_failed_log$Accession) &
+          nzchar(retry_failed_log$Accession),
+        ,
+        drop = FALSE
+      ]
+      
+      retry_failed_log$.normalized_accession <- normalize_accession(
+        retry_failed_log$Accession
+      )
+      
+      retry_failed_log <- retry_failed_log[
+        !duplicated(retry_failed_log$.normalized_accession),
+        ,
+        drop = FALSE
+      ]
+      
+      retry_failed_log$.normalized_accession <- NULL
+      
+      message(
+        "\n============================================================"
+      )
+      message(
+        "Beginning final failed-accession retry stage."
+      )
+      message(
+        nrow(retry_failed_log),
+        " unique failed accession(s) currently remain."
+      )
+      message(
+        "Maximum additional retry passes: ",
+        failed_retry_passes
+      )
+      message(
+        "============================================================"
+      )
+      
+      # --------------------------------------------------------
+      # Load metadata that may already have been recovered by
+      # a previous retry run
+      # --------------------------------------------------------
+      
+      recovered_accessions <- character(0)
+      
+      if (file.exists(recovered_failed_path)) {
+        
+        existing_recovered <- read.csv(
+          recovered_failed_path,
+          stringsAsFactors = FALSE,
+          colClasses = "character"
+        )
+        
+        if (nrow(existing_recovered) > 0) {
+          
+          recovered_col <- if (
+            "GBSeq_accession.version" %in%
+            names(existing_recovered)
+          ) {
+            "GBSeq_accession.version"
+          } else {
+            "Accession"
+          }
+          
+          recovered_accessions <- normalize_accession(
+            existing_recovered[[recovered_col]]
+          )
+          
+          retry_failed_log <- retry_failed_log[
+            !normalize_accession(
+              retry_failed_log$Accession
+            ) %in% recovered_accessions,
+            ,
+            drop = FALSE
+          ]
+          
+          if (nrow(retry_failed_log) == 0) {
+            message(
+              "\nAll failed accessions were already recovered ",
+              "by an earlier retry run."
+            )
+          }
+        }
+      }
+      
+      # ========================================================
+      # Retry passes
+      # ========================================================
+      
+      for (
+        retry_pass in seq_len(failed_retry_passes)
+      ) {
+        
+        if (nrow(retry_failed_log) == 0) {
+          break
+        }
+        
+        retry_start <- Sys.time()
+        
+        retry_accessions <- retry_failed_log$Accession
+        
+        retry_taxon_lookup <- retry_failed_log[, c(
+          "Accession",
+          "Taxon"
+        ), drop = FALSE]
+        
+        retry_taxon_lookup$.normalized_accession <-
+          normalize_accession(
+            retry_taxon_lookup$Accession
+          )
+        
+        retry_taxon_lookup <- retry_taxon_lookup[
+          !duplicated(
+            retry_taxon_lookup$.normalized_accession
+          ),
+          ,
+          drop = FALSE
+        ]
+        
+        retry_batches <- split(
+          retry_accessions,
+          ceiling(
+            seq_along(retry_accessions) /
+              metadata_batch_size
+          )
+        )
+        
+        num_retry_batches <- length(retry_batches)
+        
+        message(
+          "\n------------------------------------------------------------"
+        )
+        message(
+          "FAILED ACCESSION RETRY PASS ",
+          retry_pass,
+          " / ",
+          failed_retry_passes
+        )
+        message(
+          "Retrying ",
+          length(retry_accessions),
+          " accession(s) in ",
+          num_retry_batches,
+          " batch(es)."
+        )
+        message(
+          "------------------------------------------------------------"
+        )
+        
+        remaining_failed_accessions <- character(0)
+        
+        recovered_buffer <- list()
+        recovered_buffer_count <- 0L
+        
+        retry_success_count <- 0L
+        retry_fail_count <- 0L
+        
+        # ======================================================
+        # Retry batch loop
+        # ======================================================
+        
+        for (
+          retry_batch_index in seq_along(
+            retry_batches
+          )
+        ) {
+          
+          accession_batch <- unname(
+            retry_batches[[retry_batch_index]]
+          )
+          
+          if (
+            retry_batch_index == 1 ||
+            retry_batch_index %% progress_every == 0 ||
+            retry_batch_index == num_retry_batches
+          ) {
+            
+            message(
+              "Retry pass ",
+              retry_pass,
+              " | batch ",
+              retry_batch_index,
+              " / ",
+              num_retry_batches,
+              " | ",
+              length(accession_batch),
+              " accession(s)"
+            )
+          }
+          
+          batch_result <- fetch_metadata_batch_resilient(
+            accessions = accession_batch,
+            min_batch_size = min_batch_size,
+            max_retries = batch_max_retries,
+            retry_wait = batch_retry_wait,
+            ncbi_database = ncbi_database
+          )
+          
+          # ----------------------------------------------------
+          # Identify returned accessions
+          # ----------------------------------------------------
+          
+          returned_accessions <- character(0)
+          
+          if (
+            !is.null(batch_result) &&
+            nrow(batch_result) > 0
+          ) {
+            
+            returned_column <- if (
+              "GBSeq_accession.version" %in%
+              names(batch_result)
+            ) {
+              "GBSeq_accession.version"
+            } else {
+              "Accession"
+            }
+            
+            returned_accessions <- normalize_accession(
+              batch_result[[returned_column]]
+            )
+            
+            retry_success_count <- retry_success_count +
+              nrow(batch_result)
+            
+            # --------------------------------------------------
+            # Add recovered metadata to retry buffer
+            # --------------------------------------------------
+            
+            for (
+              row_index in seq_len(
+                nrow(batch_result)
+              )
+            ) {
+              
+              recovered_buffer[[
+                length(recovered_buffer) + 1L
+              ]] <- batch_result[
+                row_index,
+                ,
+                drop = FALSE
+              ]
+              
+              recovered_buffer_count <-
+                recovered_buffer_count + 1L
+            }
+          }
+          
+          # ----------------------------------------------------
+          # Determine what is still missing
+          # ----------------------------------------------------
+          
+          missing_accessions <- accession_batch[
+            !normalize_accession(accession_batch) %in%
+              returned_accessions
+          ]
+          
+          if (length(missing_accessions) > 0) {
+            
+            retry_fail_count <- retry_fail_count +
+              length(missing_accessions)
+            
+            remaining_failed_accessions <- c(
+              remaining_failed_accessions,
+              missing_accessions
+            )
+          }
+          
+          # ----------------------------------------------------
+          # Incrementally save recovered retry metadata
+          # ----------------------------------------------------
+          
+          if (
+            recovered_buffer_count >= checkpoint_every
+          ) {
+            
+            recovered_chunk <- plyr::rbind.fill(
+              recovered_buffer
+            )
+            
+            data.table::fwrite(
+              recovered_chunk,
+              recovered_failed_path,
+              append = file.exists(
+                recovered_failed_path
+              ),
+              col.names = !file.exists(
+                recovered_failed_path
+              )
+            )
+            
+            message(
+              "Recovered-accession checkpoint updated: ",
+              recovered_failed_path
+            )
+            
+            recovered_buffer <- list()
+            recovered_buffer_count <- 0L
+            
+            gc()
+          }
+          
+          Sys.sleep(
+            get_sleep_duration()
+          )
+        }
+        
+        # ======================================================
+        # Flush remaining recovered metadata
+        # ======================================================
+        
+        if (length(recovered_buffer) > 0) {
+          
+          recovered_chunk <- plyr::rbind.fill(
+            recovered_buffer
+          )
+          
+          data.table::fwrite(
+            recovered_chunk,
+            recovered_failed_path,
+            append = file.exists(
+              recovered_failed_path
+            ),
+            col.names = !file.exists(
+              recovered_failed_path
+            )
+          )
+          
+          message(
+            "Final recovered-accession chunk written: ",
+            recovered_failed_path
+          )
+          
+          recovered_buffer <- list()
+          recovered_buffer_count <- 0L
+          
+          gc()
+        }
+        
+        # ======================================================
+        # Deduplicate recovered metadata checkpoint
+        # ======================================================
+        
+        if (file.exists(recovered_failed_path)) {
+          
+          recovered_metadata <- read.csv(
+            recovered_failed_path,
+            stringsAsFactors = FALSE,
+            colClasses = "character"
+          )
+          
+          if (nrow(recovered_metadata) > 0) {
+            
+            recovered_col <- if (
+              "GBSeq_accession.version" %in%
+              names(recovered_metadata)
+            ) {
+              "GBSeq_accession.version"
+            } else {
+              "Accession"
+            }
+            
+            recovered_metadata$.normalized_accession <-
+              normalize_accession(
+                recovered_metadata[[recovered_col]]
+              )
+            
+            recovered_metadata <- recovered_metadata[
+              !duplicated(
+                recovered_metadata$.normalized_accession
+              ),
+              ,
+              drop = FALSE
+            ]
+            
+            recovered_metadata$.normalized_accession <- NULL
+            
+            write.csv(
+              recovered_metadata,
+              recovered_failed_path,
+              row.names = FALSE
+            )
+          }
+        }
+        
+        # ======================================================
+        # Build failure list for next retry pass
+        # ======================================================
+        
+        remaining_failed_accessions <- unique(
+          remaining_failed_accessions
+        )
+        
+        if (
+          length(remaining_failed_accessions) > 0
+        ) {
+          
+          remaining_normalized <- normalize_accession(
+            remaining_failed_accessions
+          )
+          
+          taxon_match <- match(
+            remaining_normalized,
+            retry_taxon_lookup$.normalized_accession
+          )
+          
+          remaining_taxa <- retry_taxon_lookup$Taxon[
+            taxon_match
+          ]
+          
+          remaining_taxa[
+            is.na(remaining_taxa)
+          ] <- "FAILED_RETRY"
+          
+          retry_failed_log <- data.frame(
+            Taxon = remaining_taxa,
+            Accession = remaining_failed_accessions,
+            Error = rep(
+              paste0(
+                "Accession still not returned after failed-accession ",
+                "retry pass ",
+                retry_pass,
+                "."
+              ),
+              length(remaining_failed_accessions)
+            ),
+            Time = rep(
+              format(
+                Sys.time(),
+                "%Y-%m-%d %H:%M:%S"
+              ),
+              length(remaining_failed_accessions)
+            ),
+            stringsAsFactors = FALSE
+          )
+          
+        } else {
+          
+          retry_failed_log <- data.frame(
+            Taxon = character(),
+            Accession = character(),
+            Error = character(),
+            Time = character(),
+            stringsAsFactors = FALSE
+          )
+        }
+        
+        # ------------------------------------------------------
+        # Rewrite failure file after every retry pass
+        #
+        # It now contains ONLY accessions that remain unresolved.
+        # ------------------------------------------------------
+        
+        write.csv(
+          retry_failed_log,
+          failed_path,
+          row.names = FALSE
+        )
+        
+        retry_end <- Sys.time()
+        
+        retry_elapsed <- as.numeric(
+          difftime(
+            retry_end,
+            retry_start,
+            units = "mins"
+          )
+        )
+        
+        message(
+          "\nRetry pass ",
+          retry_pass,
+          " complete in ",
+          round(retry_elapsed, 2),
+          " minutes."
+        )
+        
+        message(
+          "Recovered this pass: ",
+          length(retry_accessions) -
+            nrow(retry_failed_log)
+        )
+        
+        message(
+          "Still failed: ",
+          nrow(retry_failed_log)
+        )
+      }
+      
+      # ========================================================
+      # Final failed-retry status
+      # ========================================================
+      
+      if (nrow(retry_failed_log) == 0) {
+        
+        message(
+          "\nAll failed metadata accessions were recovered."
+        )
+        
+      } else {
+        
+        message(
+          "\n============================================================"
+        )
+        
+        message(
+          "FAILED ACCESSION RETRY LIMIT REACHED"
+        )
+        
+        message(
+          nrow(retry_failed_log),
+          " accession(s) remain unresolved after ",
+          failed_retry_passes,
+          " additional retry pass(es)."
+        )
+        
+        message(
+          "These accessions will not be retried again automatically ",
+          "during this call."
+        )
+        
+        message(
+          "Remaining failures are recorded in: ",
+          failed_path
+        )
+        
+        message(
+          "============================================================"
+        )
+      }
+    }
+  }
+  
+  # ============================================================
+  # Combine completed metadata checkpoints
+  # ============================================================
+  
   checkpoint_files <- list.files(
     checkpoint_dir,
     pattern = "^metadata_.*\\.csv$",
@@ -658,23 +6709,46 @@ retrieve_ncbi_metadata <- function(project_name,
   )
   
   checkpoint_files <- checkpoint_files[
-    !grepl("metadata_failed_accessions\\.csv$", checkpoint_files)
+    !grepl(
+      "metadata_failed_accessions\\.csv$",
+      checkpoint_files
+    )
   ]
   
   if (length(checkpoint_files) == 0) {
-    stop("No checkpoint metadata files found in: ", checkpoint_dir)
+    stop(
+      "No checkpoint metadata files found in: ",
+      checkpoint_dir
+    )
   }
   
-  message("\nCombining ", length(checkpoint_files), " checkpoint file(s).")
-  
-  metadata_database <- plyr::rbind.fill(
-    lapply(checkpoint_files, function(x) {
-      read.csv(x, stringsAsFactors = FALSE)
-    })
+  message(
+    "\nCombining ",
+    length(checkpoint_files),
+    " checkpoint file(s)."
   )
   
-  metadata_database <- metadata_database %>%
-    dplyr::distinct(Accession, .keep_all = TRUE)
+  metadata_database <- plyr::rbind.fill(
+    lapply(
+      checkpoint_files,
+      function(x) {
+        read.csv(
+          x,
+          stringsAsFactors = FALSE
+        )
+      }
+    )
+  )
+  
+  metadata_database <- dplyr::distinct(
+    metadata_database,
+    Accession,
+    .keep_all = TRUE
+  )
+  
+  # ============================================================
+  # Write final metadata
+  # ============================================================
   
   final_path <- paste0(
     "./metadata_files/all_accessions_pulled_metadata_",
@@ -682,10 +6756,39 @@ retrieve_ncbi_metadata <- function(project_name,
     ".csv"
   )
   
-  write.csv(metadata_database, final_path, row.names = FALSE)
+  write.csv(
+    metadata_database,
+    final_path,
+    row.names = FALSE
+  )
+  
+  # ============================================================
+  # Final timing summary
+  # ============================================================
   
   overall_end <- Sys.time()
-  total_elapsed <- as.numeric(difftime(overall_end, overall_start, units = "mins"))
+  
+  total_elapsed <- as.numeric(
+    difftime(
+      overall_end,
+      overall_start,
+      units = "mins"
+    )
+  )
+  
+  final_failed_count <- 0L
+  
+  if (file.exists(failed_path)) {
+    
+    final_failed_file <- read.csv(
+      failed_path,
+      stringsAsFactors = FALSE
+    )
+    
+    final_failed_count <- nrow(
+      final_failed_file
+    )
+  }
   
   timing_log <- rbind(
     timing_log,
@@ -693,32 +6796,73 @@ retrieve_ncbi_metadata <- function(project_name,
       Taxon = "TOTAL",
       Num_accessions = nrow(accession_list),
       Num_successful = nrow(metadata_database),
-      Num_failed = if (file.exists(failed_path)) nrow(read.csv(failed_path)) else 0L,
-      Start_time = format(overall_start, "%Y-%m-%d %H:%M:%S"),
-      End_time = format(overall_end, "%Y-%m-%d %H:%M:%S"),
-      Elapsed_minutes = round(total_elapsed, 2),
+      Num_failed = final_failed_count,
+      Start_time = format(
+        overall_start,
+        "%Y-%m-%d %H:%M:%S"
+      ),
+      End_time = format(
+        overall_end,
+        "%Y-%m-%d %H:%M:%S"
+      ),
+      Elapsed_minutes = round(
+        total_elapsed,
+        2
+      ),
       Checkpoint_file = final_path,
       stringsAsFactors = FALSE
     )
   )
   
-  write.csv(timing_log, timing_path, row.names = FALSE)
+  write.csv(
+    timing_log,
+    timing_path,
+    row.names = FALSE
+  )
   
   message("\nMetadata retrieval complete.")
-  message("Final metadata written to: ", final_path)
-  message("Timing log written to: ", timing_path)
+  
+  message(
+    "Final metadata written to: ",
+    final_path
+  )
+  
+  message(
+    "Timing log written to: ",
+    timing_path
+  )
   
   if (file.exists(failed_path)) {
-    message("Failed accession log written to: ", failed_path)
+    
+    message(
+      "Remaining failed accession log written to: ",
+      failed_path
+    )
+    
+    message(
+      "Final unresolved accession count: ",
+      final_failed_count
+    )
+  }
+  
+  if (file.exists(recovered_failed_path)) {
+    
+    message(
+      "Recovered failed-accession metadata written to: ",
+      recovered_failed_path
+    )
   }
   
   invisible(metadata_database)
 }
 
+
+
 # Custom sequences merge
 merge_metadata_with_custom_file <- function(project_name,
                                             my_lab_sequences = get0("my_lab_sequences", envir = .GlobalEnv, ifnotfound = ""),
                                             metadata_dir = "./metadata_files") {
+  
   metadata_file_path <- file.path(
     metadata_dir,
     paste0("all_accessions_pulled_metadata_", project_name, ".csv")
@@ -767,7 +6911,14 @@ merge_metadata_with_custom_file <- function(project_name,
   ) |>
     as.data.frame()
   
-  required_cols <- c("Accession", "strain", "sequence", "organism", "gene")
+  required_cols <- c(
+    "Accession",
+    "strain",
+    "sequence",
+    "organism",
+    "gene"
+  )
+  
   missing_required <- setdiff(required_cols, names(custom_sequences))
   
   if (length(missing_required) > 0) {
@@ -780,16 +6931,6 @@ merge_metadata_with_custom_file <- function(project_name,
       paste(names(custom_sequences), collapse = ", ")
     )
   }
-  
-  custom_sequences <- custom_sequences %>%
-    dplyr::mutate(
-      Accession.original = Accession,
-      Accession = dplyr::if_else(
-        duplicated(Accession) | duplicated(Accession, fromLast = TRUE),
-        paste(Accession, gene, sep = "_"),
-        Accession
-      )
-    )
   
   recommended_cols <- c(
     "product",
@@ -806,17 +6947,56 @@ merge_metadata_with_custom_file <- function(project_name,
     }
   }
   
-  merged_data <- plyr::rbind.fill(metadata_database, custom_sequences)
+  custom_sequences <- custom_sequences %>%
+    dplyr::mutate(
+      
+      # Create globally unique accession names for lab sequences
+      Accession = paste(strain, gene, Accession, sep = "_"),
+      
+      # Populate these fields if absent so region curation can recognize them
+      product = ifelse(
+        is.na(product) | product == "",
+        gene,
+        product
+      ),
+      
+      accession_title = ifelse(
+        is.na(accession_title) | accession_title == "",
+        gene,
+        accession_title
+      ),
+      
+      custom_sequence = TRUE
+    )
   
+  if (!"custom_sequence" %in% names(metadata_database)) {
+    metadata_database$custom_sequence <- FALSE
+  }
+  
+  merged_data <- plyr::rbind.fill(
+    metadata_database,
+    custom_sequences
+  )
+  
+  # Remove only true duplicate records
   merged_data <- merged_data %>%
-    dplyr::distinct(Accession, gene, .keep_all = TRUE)
+    dplyr::distinct(
+      strain,
+      organism,
+      gene,
+      Accession,
+      .keep_all = TRUE
+    )
   
-  write.csv(merged_data, metadata_file_path, row.names = FALSE)
+  write.csv(
+    merged_data,
+    metadata_file_path,
+    row.names = FALSE
+  )
   
   message("Merged custom sequences into: ", metadata_file_path)
   message("Custom rows added from: ", my_lab_sequences)
-  message("If duplicate custom accessions were present, they were renamed as Accession_gene.")
-  message("Original custom accession values were preserved in Accession.original.")
+  message("Custom accessions renamed as strain_gene_originalAccession")
   
   invisible(merged_data)
 }
@@ -1191,65 +7371,75 @@ prepare_host_terms <- function(
 
 
 # to count the number of accessions per failed term
-add_failed_host_term_counts <- function(failed_df,
-                                        project_name,
-                                        metadata_dir = "./metadata_files") {
-  metadata_path <- file.path(
-    metadata_dir,
-    paste0("all_accessions_pulled_metadata_", project_name, "_curated.csv")
+.add_failed_host_term_counts <- function(failed_df,
+                                         metadata_file) {
+  
+  if (nrow(failed_df) == 0) {
+    failed_df$accession_count <- integer(0)
+    return(failed_df)
+  }
+  
+  meta <- read.csv(
+    metadata_file,
+    stringsAsFactors = FALSE,
+    check.names = FALSE
   )
   
-  if (!file.exists(metadata_path)) {
-    warning("Cannot add failed host term counts; metadata file not found: ", metadata_path)
-    failed_df$accession_count <- NA_integer_
-    return(failed_df)
-  }
-  
-  meta <- read.csv(metadata_path, stringsAsFactors = FALSE)
-  
   if (!"host.standardized" %in% names(meta)) {
-    warning("Cannot add failed host term counts; metadata is missing host.standardized.")
-    failed_df$accession_count <- NA_integer_
-    return(failed_df)
-  }
-  
-  # If Accession exists, count unique accessions.
-  # Otherwise, fall back to row counts.
-  if ("Accession" %in% names(meta)) {
-    count_df <- meta %>%
-      dplyr::filter(!is.na(host.standardized) & host.standardized != "") %>%
-      dplyr::group_by(host.standardized) %>%
-      dplyr::summarise(
-        accession_count = dplyr::n_distinct(Accession),
-        .groups = "drop"
-      )
-  } else {
-    count_df <- meta %>%
-      dplyr::filter(!is.na(host.standardized) & host.standardized != "") %>%
-      dplyr::count(host.standardized, name = "accession_count")
-  }
-  
-  failed_df <- failed_df %>%
-    dplyr::select(-dplyr::any_of("accession_count")) %>%
-    dplyr::left_join(
-      count_df,
-      by = c("original_term" = "host.standardized")
-    ) %>%
-    dplyr::mutate(
-      accession_count = dplyr::if_else(
-        is.na(accession_count),
-        0L,
-        as.integer(accession_count)
-      )
-    ) %>%
-    dplyr::arrange(
-      dplyr::desc(accession_count),
-      original_term
+    stop(
+      "host.standardized column not found in metadata: ",
+      metadata_file
     )
+  }
+  
+  accession_col <- intersect(
+    c("Accession", "accession"),
+    names(meta)
+  )
+  
+  if (length(accession_col) == 0) {
+    stop("Could not find accession column in metadata.")
+  }
+  
+  accession_col <- accession_col[1]
+  
+  # Normalize exactly the same way as the taxonomy search
+  standardized_terms <- .host_clean_term(
+    meta$host.standardized
+  )
+  
+  failed_terms <- .host_clean_term(
+    failed_df$original_term
+  )
+  
+  failed_df$accession_count <- vapply(
+    failed_terms,
+    function(term) {
+      
+      if (is.na(term) || term == "") {
+        return(0L)
+      }
+      
+      idx <- which(
+        !is.na(standardized_terms) &
+          standardized_terms == term
+      )
+      
+      if (length(idx) == 0) {
+        return(0L)
+      }
+      
+      length(
+        unique(
+          meta[[accession_col]][idx]
+        )
+      )
+    },
+    integer(1)
+  )
   
   failed_df
 }
-
 
 run_host_taxonomy_lookup <- function(
     project_name,
@@ -1720,16 +7910,31 @@ summarize_host_usage <- function(
   
   meta <- read.csv(metadata_file, stringsAsFactors = FALSE)
   
-  fungal_col <- paste0("Strain.", fungal_rank)
-  host_col   <- paste0("Host.", host_rank)
-  
-  if (!fungal_col %in% names(meta)) {
-    stop(
-      "Column '", fungal_col, "' not found in metadata.\n",
-      "Available Strain.* columns: ",
-      paste(grep("^Strain\\.", names(meta), value = TRUE), collapse = ", ")
-    )
+  if (fungal_rank == "species") {
+    fungal_col <- "org_name"
+    fungal_output_col <- "Strain.species"
+    
+    if (!fungal_col %in% names(meta)) {
+      stop(
+        "fungal_rank = 'species' requires column 'org_name' in metadata.\n",
+        "Available columns: ",
+        paste(names(meta), collapse = ", ")
+      )
+    }
+  } else {
+    fungal_col <- paste0("Strain.", fungal_rank)
+    fungal_output_col <- fungal_col
+    
+    if (!fungal_col %in% names(meta)) {
+      stop(
+        "Column '", fungal_col, "' not found in metadata.\n",
+        "Available Strain.* columns: ",
+        paste(grep("^Strain\\.", names(meta), value = TRUE), collapse = ", ")
+      )
+    }
   }
+  
+  host_col <- paste0("Host.", host_rank)
   
   if (!host_col %in% names(meta)) {
     stop(
@@ -1786,8 +7991,8 @@ summarize_host_usage <- function(
       values_fill = list(accession_count = 0)
     )
   
-  names(counts_wide)[1] <- fungal_col
-  host_cols <- setdiff(names(counts_wide), fungal_col)
+  names(counts_wide)[1] <- fungal_output_col
+  host_cols <- setdiff(names(counts_wide), fungal_output_col)
   
   counts_wide <- counts_wide %>%
     dplyr::mutate(
@@ -1860,6 +8065,8 @@ summarize_host_usage <- function(
   invisible(result)
 }
 
+
+
 ##############################
 # Host assessment wrappers
 ##############################
@@ -1906,6 +8113,11 @@ summarize_host_usage <- function(
 .host_taxonomy_cols <- function() {
   c(
     "Host.standardized",
+    "Host.taxid",
+    "Host.matched_name",
+    "Host.matched_name_class",
+    "Host.lookup_source",
+    "Host.superkingdom",
     "Host.kingdom",
     "Host.phylum",
     "Host.class",
@@ -1948,7 +8160,7 @@ summarize_host_usage <- function(
   
   for (col in required_cols) {
     if (!col %in% names(failed_df)) {
-      failed_df[[col]] <- NA_character_
+      failed_df[[col]] <- rep(NA_character_, nrow(failed_df))
     }
   }
   
@@ -1987,17 +8199,35 @@ summarize_host_usage <- function(
   invisible(failed_df)
 }
 
-.read_host_taxonomy <- function(project_name, host_dir = "./host_assessment") {
-  taxonomy_path <- .host_taxonomy_path(project_name, host_dir)
+.read_host_taxonomy <- function(
+    project_name,
+    host_dir = "./host_assessment"
+) {
+  taxonomy_path <- .host_taxonomy_path(
+    project_name,
+    host_dir
+  )
+  
   taxonomy_cols <- .host_taxonomy_cols()
   
   if (file.exists(taxonomy_path)) {
-    host_taxonomy <- read.csv(taxonomy_path, stringsAsFactors = FALSE)
+    
+    host_taxonomy <- read.csv(
+      taxonomy_path,
+      stringsAsFactors = FALSE
+    )
     
     if (!"Host.standardized" %in% names(host_taxonomy)) {
       if ("Host.standard" %in% names(host_taxonomy)) {
-        message("Detected legacy taxonomy file. Renaming 'Host.standard' to 'Host.standardized'.")
-        names(host_taxonomy)[names(host_taxonomy) == "Host.standard"] <- "Host.standardized"
+        
+        message(
+          "Detected legacy taxonomy file. Renaming 'Host.standard' to 'Host.standardized'."
+        )
+        
+        names(host_taxonomy)[
+          names(host_taxonomy) == "Host.standard"
+        ] <- "Host.standardized"
+        
       } else {
         stop(
           "Existing host taxonomy file is missing 'Host.standardized': ",
@@ -2012,12 +8242,26 @@ summarize_host_usage <- function(
       }
     }
     
-    host_taxonomy <- host_taxonomy[, taxonomy_cols, drop = FALSE]
+    host_taxonomy <- host_taxonomy[
+      ,
+      taxonomy_cols,
+      drop = FALSE
+    ]
+    
+    # Keep TaxID type consistent with new taxonomy lookup rows
+    host_taxonomy$Host.taxid <- as.character(
+      host_taxonomy$Host.taxid
+    )
+    
   } else {
+    
     host_taxonomy <- .empty_host_taxonomy()
   }
   
-  host_taxonomy$Host.standardized <- .host_clean_term(host_taxonomy$Host.standardized)
+  host_taxonomy$Host.standardized <-
+    .host_clean_term(
+      host_taxonomy$Host.standardized
+    )
   
   host_taxonomy
 }
@@ -2116,7 +8360,7 @@ summarize_host_usage <- function(
 .count_host_terms <- function(meta) {
   meta <- .ensure_host_standardized(meta)
   
-  terms <- .host_display_term(meta$host.standardized.original)
+  terms <- .host_display_term(meta$host.standardized)
   
   as.data.frame(table(terms), stringsAsFactors = FALSE) |>
     stats::setNames(c("original_term", "accession_count"))
@@ -2146,22 +8390,37 @@ summarize_host_usage <- function(
   failed_df
 }
 
-.lookup_one_host_taxonomy <- function(term, db = "ncbi") {
+.lookup_one_host_taxonomy_taxize <- function(
+    term,
+    db = "ncbi"
+) {
   ranks_of_interest <- c(
-    "kingdom", "phylum", "class",
-    "order", "family", "genus", "species"
+    "kingdom",
+    "phylum",
+    "class",
+    "order",
+    "family",
+    "genus",
+    "species"
   )
   
   res_list <- tryCatch(
     {
-      taxize::classification(term, db = db)
+      taxize::classification(
+        term,
+        db = db
+      )
     },
     error = function(e) {
       NULL
     }
   )
   
-  if (is.null(res_list) || length(res_list) == 0 || is.atomic(res_list)) {
+  if (
+    is.null(res_list) ||
+    length(res_list) == 0 ||
+    is.atomic(res_list)
+  ) {
     return(NULL)
   }
   
@@ -2172,12 +8431,22 @@ summarize_host_usage <- function(
   }
   
   this_row <- setNames(
-    as.list(rep(NA_character_, length(ranks_of_interest))),
-    paste0("Host.", ranks_of_interest)
+    as.list(
+      rep(
+        NA_character_,
+        length(ranks_of_interest)
+      )
+    ),
+    paste0(
+      "Host.",
+      ranks_of_interest
+    )
   )
   
   for (rk in ranks_of_interest) {
-    hit <- res$name[res$rank == rk]
+    hit <- res$name[
+      res$rank == rk
+    ]
     
     if (length(hit) > 0) {
       this_row[[paste0("Host.", rk)]] <- hit[1]
@@ -2186,11 +8455,23 @@ summarize_host_usage <- function(
   
   df_row <- data.frame(
     Host.standardized = term,
-    as.data.frame(this_row, stringsAsFactors = FALSE),
+    Host.taxid = NA_character_,
+    Host.matched_name = term,
+    Host.matched_name_class = NA_character_,
+    Host.lookup_source = "taxize_fallback",
+    Host.superkingdom = NA_character_,
+    as.data.frame(
+      this_row,
+      stringsAsFactors = FALSE
+    ),
     stringsAsFactors = FALSE
   )
   
-  df_row[, .host_taxonomy_cols(), drop = FALSE]
+  df_row[
+    ,
+    .host_taxonomy_cols(),
+    drop = FALSE
+  ]
 }
 
 .append_failed_terms <- function(
@@ -2229,26 +8510,95 @@ summarize_host_usage <- function(
   .ensure_failed_columns(failed_df)
 }
 
+
 .search_host_terms <- function(
     terms,
     project_name,
     host_dir = "./host_assessment",
     db = "ncbi",
-    sleep_sec = 0.1,
     overwrite = FALSE,
     term_type = "initial_lookup",
-    parent_map = NULL
+    parent_map = NULL,
+    use_taxize_fallback = TRUE,
+    name_lookup_file = NULL,
+    ranked_taxonomy_file = NULL
 ) {
-  if (!dir.exists(host_dir)) dir.create(host_dir, recursive = TRUE)
+  if (!dir.exists(host_dir)) {
+    dir.create(
+      host_dir,
+      recursive = TRUE
+    )
+  }
   
-  host_taxonomy <- .read_host_taxonomy(project_name, host_dir)
-  failed_df <- .read_failed_terms(project_name, host_dir)
+  # ----------------------------------------------------------
+  # Load project outputs
+  # ----------------------------------------------------------
   
-  terms <- unique(.host_clean_term(terms))
-  terms <- terms[!is.na(terms)]
+  host_taxonomy <- .read_host_taxonomy(
+    project_name,
+    host_dir
+  )
   
-  invalid_terms <- terms[.host_is_invalid_tax_term(terms)]
-  valid_terms <- terms[!.host_is_invalid_tax_term(terms)]
+  failed_df <- .read_failed_terms(
+    project_name,
+    host_dir
+  )
+  
+  ambiguous_df <- .read_ambiguous_terms(
+    project_name,
+    host_dir
+  )
+  
+  # ----------------------------------------------------------
+  # Load local NCBI databases ONCE
+  # ----------------------------------------------------------
+  
+  message("Loading local NCBI taxonomy databases...")
+  
+  name_lookup <- .read_ncbi_name_lookup(
+    name_lookup_file
+  )
+  
+  ranked_taxonomy <- .read_ncbi_ranked_taxonomy(
+    ranked_taxonomy_file
+  )
+  
+  message(
+    "Local NCBI name records: ",
+    format(
+      nrow(name_lookup),
+      big.mark = ","
+    )
+  )
+  
+  message(
+    "Local NCBI taxonomy records: ",
+    format(
+      nrow(ranked_taxonomy),
+      big.mark = ","
+    )
+  )
+  
+  # ----------------------------------------------------------
+  # Clean terms
+  # ----------------------------------------------------------
+  
+  terms <- unique(
+    .host_clean_term(terms)
+  )
+  
+  terms <- terms[
+    !is.na(terms) &
+      nzchar(trimws(terms))
+  ]
+  
+  invalid_terms <- terms[
+    .host_is_invalid_tax_term(terms)
+  ]
+  
+  valid_terms <- terms[
+    !.host_is_invalid_tax_term(terms)
+  ]
   
   if (length(invalid_terms) > 0) {
     failed_df <- .append_failed_terms(
@@ -2259,64 +8609,242 @@ summarize_host_usage <- function(
     )
   }
   
-  already_done <- unique(.host_clean_term(host_taxonomy$Host.standardized))
+  already_done <- unique(
+    .host_clean_term(
+      host_taxonomy$Host.standardized
+    )
+  )
   
   if (!overwrite) {
-    valid_terms <- setdiff(valid_terms, already_done)
+    valid_terms <- setdiff(
+      valid_terms,
+      already_done
+    )
   }
   
+  # ----------------------------------------------------------
+  # Nothing to do
+  # ----------------------------------------------------------
+  
   if (length(valid_terms) == 0) {
-    message("No new valid host terms to query.")
+    message(
+      "No new valid host terms to query."
+    )
+    
+    failed_df <- .add_failed_host_term_counts(
+      failed_df,
+      project_name
+    )
+    
     .write_failed_terms(
-      .add_failed_host_term_counts(failed_df, project_name),
+      failed_df,
       project_name,
       host_dir
     )
-    return(invisible(list(
-      taxonomy = host_taxonomy,
-      failed_table = failed_df,
-      newly_failed = character(0),
-      newly_successful = character(0)
-    )))
+    
+    .write_ambiguous_terms(
+      ambiguous_df,
+      project_name,
+      host_dir
+    )
+    
+    return(
+      invisible(
+        list(
+          taxonomy = host_taxonomy,
+          failed_table = failed_df,
+          ambiguous_table = ambiguous_df,
+          newly_failed = character(0),
+          newly_ambiguous = character(0),
+          newly_successful = character(0)
+        )
+      )
+    )
   }
   
-  message("Host taxonomy lookup starting for ", length(valid_terms), " terms.")
+  message(
+    "Host taxonomy lookup starting for ",
+    length(valid_terms),
+    " term(s)."
+  )
+  
+  # ----------------------------------------------------------
+  # Containers
+  # ----------------------------------------------------------
   
   successful_rows <- list()
   failed_terms <- character(0)
+  ambiguous_terms <- character(0)
+  
+  # ----------------------------------------------------------
+  # Lookup
+  # ----------------------------------------------------------
   
   for (term in valid_terms) {
-    message("  Querying: ", term)
     
-    df_row <- .lookup_one_host_taxonomy(term, db = db)
+    message("  Looking up: ", term)
     
-    if (is.null(df_row)) {
-      message("    FAILED")
-      failed_terms <- c(failed_terms, term)
-    } else {
-      message("    OK")
-      successful_rows[[length(successful_rows) + 1L]] <- df_row
+    local_match <- .lookup_local_taxid(
+      term = term,
+      name_lookup = name_lookup
+    )
+    
+    # --------------------------------------------------------
+    # UNIQUE LOCAL MATCH
+    # --------------------------------------------------------
+    
+    if (local_match$status == "unique") {
+      
+      df_row <- .lookup_local_ranked_taxonomy(
+        term = term,
+        taxid = local_match$taxid,
+        matched_name = local_match$matched_name,
+        matched_name_class = local_match$matched_name_class,
+        ranked_taxonomy = ranked_taxonomy
+      )
+      
+      if (!is.null(df_row)) {
+        
+        message(
+          "    LOCAL OK | TaxID ",
+          local_match$taxid
+        )
+        
+        successful_rows[[length(successful_rows) + 1L]] <- df_row
+        
+        next
+      }
+      
+      # Extremely unusual case:
+      # name exists but TaxID absent from ranked taxonomy.
+      message(
+        "    Local TaxID found but ranked taxonomy was missing."
+      )
     }
     
-    Sys.sleep(sleep_sec)
+    # --------------------------------------------------------
+    # AMBIGUOUS LOCAL MATCH
+    # --------------------------------------------------------
+    
+    if (local_match$status == "ambiguous") {
+      
+      message(
+        "    AMBIGUOUS | ",
+        length(
+          unique(local_match$hits$TaxID)
+        ),
+        " TaxIDs"
+      )
+      
+      ambiguous_terms <- c(
+        ambiguous_terms,
+        term
+      )
+      
+      ambiguous_df <- .append_ambiguous_lookup(
+        ambiguity_df = ambiguous_df,
+        term = term,
+        name_hits = local_match$hits,
+        ranked_taxonomy = ranked_taxonomy
+      )
+      
+      # IMPORTANT:
+      # never use taxize to guess an ambiguous local name.
+      next
+    }
+    
+    # --------------------------------------------------------
+    # NO LOCAL MATCH
+    # --------------------------------------------------------
+    
+    if (local_match$status == "not_found") {
+      
+      message(
+        "    No local NCBI name match."
+      )
+      
+    }
+    
+    # --------------------------------------------------------
+    # OPTIONAL TAXIZE FALLBACK
+    # --------------------------------------------------------
+    
+    if (isTRUE(use_taxize_fallback)) {
+      
+      message(
+        "    Trying taxize fallback..."
+      )
+      
+      fallback_row <- .lookup_one_host_taxonomy_taxize(
+        term,
+        db = db
+      )
+      
+      if (!is.null(fallback_row)) {
+        
+        message(
+          "    TAXIZE OK"
+        )
+        
+        successful_rows[[length(successful_rows) + 1L]] <- fallback_row
+        next
+      }
+    }
+    
+    # --------------------------------------------------------
+    # COMPLETE FAILURE
+    # --------------------------------------------------------
+    
+    message(
+      "    FAILED"
+    )
+    
+    failed_terms <- c(
+      failed_terms,
+      term
+    )
   }
   
+  # ----------------------------------------------------------
+  # Add successes
+  # ----------------------------------------------------------
+  
   if (length(successful_rows) > 0) {
-    new_tax_rows <- dplyr::bind_rows(successful_rows)
+    
+    new_tax_rows <- dplyr::bind_rows(
+      successful_rows
+    )
     
     if (overwrite) {
+      
       host_taxonomy <- host_taxonomy[
-        !host_taxonomy$Host.standardized %in% new_tax_rows$Host.standardized,
+        !host_taxonomy$Host.standardized %in%
+          new_tax_rows$Host.standardized,
         ,
         drop = FALSE
       ]
     }
     
-    host_taxonomy <- dplyr::bind_rows(host_taxonomy, new_tax_rows)
-    host_taxonomy <- host_taxonomy[!duplicated(host_taxonomy$Host.standardized), ]
+    host_taxonomy <- dplyr::bind_rows(
+      host_taxonomy,
+      new_tax_rows
+    )
+    
+    host_taxonomy <- host_taxonomy[
+      !duplicated(
+        host_taxonomy$Host.standardized
+      ),
+      ,
+      drop = FALSE
+    ]
   }
   
+  # ----------------------------------------------------------
+  # Add failures
+  # ----------------------------------------------------------
+  
   if (length(failed_terms) > 0) {
+    
     failed_df <- .append_failed_terms(
       failed_df,
       failed_terms,
@@ -2325,22 +8853,1238 @@ summarize_host_usage <- function(
     )
   }
   
-  failed_df <- .add_failed_host_term_counts(failed_df, project_name)
+  # ----------------------------------------------------------
+  # Counts
+  # ----------------------------------------------------------
   
-  .write_host_taxonomy(host_taxonomy, project_name, host_dir)
-  .write_failed_terms(failed_df, project_name, host_dir)
+  failed_df <- .add_failed_host_term_counts(
+    failed_df,
+    project_name
+  )
   
-  invisible(list(
-    taxonomy = host_taxonomy,
-    failed_table = failed_df,
-    newly_failed = unique(failed_terms),
-    newly_successful = if (length(successful_rows) > 0) {
-      unique(dplyr::bind_rows(successful_rows)$Host.standardized)
-    } else {
-      character(0)
-    }
-  ))
+  # ----------------------------------------------------------
+  # Write everything
+  # ----------------------------------------------------------
+  
+  .write_host_taxonomy(
+    host_taxonomy,
+    project_name,
+    host_dir
+  )
+  
+  .write_failed_terms(
+    failed_df,
+    project_name,
+    host_dir
+  )
+  
+  .write_ambiguous_terms(
+    ambiguous_df,
+    project_name,
+    host_dir
+  )
+  
+  # ----------------------------------------------------------
+  # Summary
+  # ----------------------------------------------------------
+  
+  newly_successful <- if (
+    length(successful_rows) > 0
+  ) {
+    unique(
+      dplyr::bind_rows(
+        successful_rows
+      )$Host.standardized
+    )
+  } else {
+    character(0)
+  }
+  
+  message("")
+  message("Host taxonomy lookup complete.")
+  message(
+    "  Successful: ",
+    length(newly_successful)
+  )
+  message(
+    "  Ambiguous: ",
+    length(unique(ambiguous_terms))
+  )
+  message(
+    "  Failed: ",
+    length(unique(failed_terms))
+  )
+  
+  invisible(
+    list(
+      taxonomy = host_taxonomy,
+      failed_table = failed_df,
+      ambiguous_table = ambiguous_df,
+      newly_failed = unique(failed_terms),
+      newly_ambiguous = unique(ambiguous_terms),
+      newly_successful = newly_successful
+    )
+  )
 }
+
+
+
+.host_example_data_dir <- function() {
+  arborist_root <- get0(
+    "arborist_repo",
+    envir = .GlobalEnv,
+    ifnotfound = normalizePath(
+      "~/github/aRborist",
+      mustWork = FALSE
+    )
+  )
+  
+  file.path(
+    arborist_root,
+    "example_data"
+  )
+}
+
+
+.host_name_lookup_path <- function(
+    name_lookup_file = NULL
+) {
+  if (!is.null(name_lookup_file) &&
+      length(name_lookup_file) == 1 &&
+      nzchar(name_lookup_file)) {
+    return(name_lookup_file)
+  }
+  
+  file.path(
+    .host_example_data_dir(),
+    "ncbi_name_lookup.rds"
+  )
+}
+
+
+.host_ranked_taxonomy_path <- function(
+    ranked_taxonomy_file = NULL
+) {
+  if (!is.null(ranked_taxonomy_file) &&
+      length(ranked_taxonomy_file) == 1 &&
+      nzchar(ranked_taxonomy_file)) {
+    return(ranked_taxonomy_file)
+  }
+  
+  file.path(
+    .host_example_data_dir(),
+    "ncbi_ranked_taxonomy.rds"
+  )
+}
+
+
+.host_shared_replacement_path <- function(
+    shared_replacement_file = NULL
+) {
+  if (!is.null(shared_replacement_file) &&
+      length(shared_replacement_file) == 1 &&
+      nzchar(shared_replacement_file)) {
+    return(shared_replacement_file)
+  }
+  
+  file.path(
+    .host_example_data_dir(),
+    "host_term_replacements.csv"
+  )
+}
+
+
+.host_ambiguous_path <- function(
+    project_name,
+    host_dir = "./host_assessment"
+) {
+  file.path(
+    host_dir,
+    paste0(
+      "host_ambiguous_terms_",
+      project_name,
+      ".csv"
+    )
+  )
+}
+
+.host_normalize_name <- function(x) {
+  x <- as.character(x)
+  
+  x <- trimws(x)
+  
+  # Collapse repeated internal whitespace
+  x <- gsub(
+    "[[:space:]]+",
+    " ",
+    x
+  )
+  
+  tolower(x)
+}
+
+
+.read_ncbi_name_lookup <- function(
+    name_lookup_file = NULL
+) {
+  path <- .host_name_lookup_path(
+    name_lookup_file
+  )
+  
+  if (!file.exists(path)) {
+    stop(
+      "NCBI name lookup database not found:\n  ",
+      path
+    )
+  }
+  
+  x <- readRDS(path)
+  
+  required <- c(
+    "TaxID",
+    "name",
+    "name_class"
+  )
+  
+  missing <- setdiff(
+    required,
+    names(x)
+  )
+  
+  if (length(missing) > 0) {
+    stop(
+      "ncbi_name_lookup.rds is missing required column(s): ",
+      paste(missing, collapse = ", ")
+    )
+  }
+  
+  if (!"normalized_name" %in% names(x)) {
+    x$normalized_name <- .host_normalize_name(
+      x$name
+    )
+  }
+  
+  x$TaxID <- as.character(x$TaxID)
+  x$name <- as.character(x$name)
+  x$name_class <- as.character(x$name_class)
+  x$normalized_name <- as.character(x$normalized_name)
+  
+  x
+}
+
+
+.read_ncbi_ranked_taxonomy <- function(
+    ranked_taxonomy_file = NULL
+) {
+  path <- .host_ranked_taxonomy_path(
+    ranked_taxonomy_file
+  )
+  
+  if (!file.exists(path)) {
+    stop(
+      "NCBI ranked taxonomy database not found:\n  ",
+      path
+    )
+  }
+  
+  x <- readRDS(path)
+  
+  
+  # ----------------------------------------------------------
+  # Standardize column names from the current local taxonomy
+  # database to the names used internally by aRborist
+  # ----------------------------------------------------------
+  
+  rename_map <- c(
+    tax_name = "Scientific.name",
+    superkingdom = "Superkingdom",
+    kingdom = "Kingdom",
+    phylum = "Phylum",
+    class = "Class",
+    order = "Order",
+    family = "Family",
+    genus = "Genus",
+    species = "Species"
+  )
+  
+  for (old_name in names(rename_map)) {
+    
+    new_name <- rename_map[[old_name]]
+    
+    if (
+      old_name %in% names(x) &&
+      !new_name %in% names(x)
+    ) {
+      names(x)[names(x) == old_name] <- new_name
+    }
+  }
+  
+  
+  # ----------------------------------------------------------
+  # Confirm required columns
+  # ----------------------------------------------------------
+  
+  required <- c(
+    "TaxID",
+    "Scientific.name"
+  )
+  
+  missing <- setdiff(
+    required,
+    names(x)
+  )
+  
+  if (length(missing) > 0) {
+    stop(
+      "ncbi_ranked_taxonomy.rds is missing required column(s): ",
+      paste(missing, collapse = ", ")
+    )
+  }
+  
+  
+  # ----------------------------------------------------------
+  # Standardize TaxID
+  # ----------------------------------------------------------
+  
+  x$TaxID <- as.character(x$TaxID)
+  
+  x
+}
+
+.read_shared_host_replacements <- function(
+    shared_replacement_file = NULL
+) {
+  path <- .host_shared_replacement_path(
+    shared_replacement_file
+  )
+  
+  if (!file.exists(path)) {
+    stop(
+      "Shared host replacement file not found:\n  ",
+      path
+    )
+  }
+  
+  x <- read.csv(
+    path,
+    stringsAsFactors = FALSE,
+    check.names = FALSE,
+    na.strings = character(0)
+  )
+  
+  required <- c(
+    "original_term",
+    "replacement_term"
+  )
+  
+  missing <- setdiff(
+    required,
+    names(x)
+  )
+  
+  if (length(missing) > 0) {
+    stop(
+      "Shared replacement file is missing required column(s): ",
+      paste(missing, collapse = ", ")
+    )
+  }
+  
+  x$original_term <- trimws(
+    as.character(x$original_term)
+  )
+  
+  x$replacement_term <- trimws(
+    as.character(x$replacement_term)
+  )
+  
+  x$normalized_original_term <- .host_normalize_name(
+    x$original_term
+  )
+  
+  # The same original term cannot point to different replacements.
+  conflict_check <- x |>
+    dplyr::filter(
+      !is.na(normalized_original_term),
+      normalized_original_term != ""
+    ) |>
+    dplyr::group_by(
+      normalized_original_term
+    ) |>
+    dplyr::summarise(
+      n_replacements = dplyr::n_distinct(
+        replacement_term,
+        na.rm = FALSE
+      ),
+      .groups = "drop"
+    ) |>
+    dplyr::filter(
+      n_replacements > 1
+    )
+  
+  if (nrow(conflict_check) > 0) {
+    stop(
+      "Conflicting duplicate terms were found in the shared host ",
+      "replacement table.\nFirst examples:\n  ",
+      paste(
+        head(conflict_check$normalized_original_term, 10),
+        collapse = "\n  "
+      )
+    )
+  }
+  
+  x <- x[
+    !duplicated(x$normalized_original_term),
+    ,
+    drop = FALSE
+  ]
+  
+  x
+}
+
+.apply_shared_host_replacements <- function(
+    meta,
+    use_shared_replacements = TRUE,
+    shared_replacement_file = NULL
+) {
+  if (!isTRUE(use_shared_replacements)) {
+    message("Shared host replacements disabled.")
+    return(meta)
+  }
+  
+  replacements <- .read_shared_host_replacements(
+    shared_replacement_file
+  )
+  
+  current_key <- .host_normalize_name(
+    meta$host.standardized
+  )
+  
+  idx <- match(
+    current_key,
+    replacements$normalized_original_term
+  )
+  
+  matched <- !is.na(idx)
+  
+  if (!any(matched)) {
+    message("No terms matched the shared host replacement table.")
+    return(meta)
+  }
+  
+  replacement_values <- replacements$replacement_term[
+    idx[matched]
+  ]
+  
+  replacement_values[
+    is.na(replacement_values) |
+      trimws(replacement_values) == "" |
+      toupper(trimws(replacement_values)) == "NA"
+  ] <- NA_character_
+  
+  meta$host.standardized[matched] <- replacement_values
+  
+  message(
+    "Shared replacement terms applied to ",
+    sum(matched),
+    " metadata row(s)."
+  )
+  
+  meta
+}
+
+.lookup_local_taxid <- function(
+    term,
+    name_lookup
+) {
+  normalized_term <- .host_normalize_name(
+    term
+  )
+  
+  hits <- name_lookup[
+    name_lookup$normalized_name == normalized_term,
+    ,
+    drop = FALSE
+  ]
+  
+  if (nrow(hits) == 0) {
+    return(list(
+      status = "not_found",
+      term = term,
+      taxid = NA_character_,
+      matched_name = NA_character_,
+      matched_name_class = NA_character_,
+      hits = hits
+    ))
+  }
+  
+  unique_taxids <- unique(
+    hits$TaxID[
+      !is.na(hits$TaxID) &
+        hits$TaxID != ""
+    ]
+  )
+  
+  if (length(unique_taxids) == 0) {
+    return(list(
+      status = "not_found",
+      term = term,
+      taxid = NA_character_,
+      matched_name = NA_character_,
+      matched_name_class = NA_character_,
+      hits = hits
+    ))
+  }
+  
+  if (length(unique_taxids) > 1) {
+    return(list(
+      status = "ambiguous",
+      term = term,
+      taxid = NA_character_,
+      matched_name = NA_character_,
+      matched_name_class = NA_character_,
+      hits = hits
+    ))
+  }
+  
+  taxid <- unique_taxids[1]
+  
+  taxid_hits <- hits[
+    hits$TaxID == taxid,
+    ,
+    drop = FALSE
+  ]
+  
+  matched_names <- unique(
+    taxid_hits$name[
+      !is.na(taxid_hits$name) &
+        taxid_hits$name != ""
+    ]
+  )
+  
+  matched_classes <- unique(
+    taxid_hits$name_class[
+      !is.na(taxid_hits$name_class) &
+        taxid_hits$name_class != ""
+    ]
+  )
+  
+  list(
+    status = "unique",
+    term = term,
+    taxid = taxid,
+    matched_name = paste(
+      matched_names,
+      collapse = "; "
+    ),
+    matched_name_class = paste(
+      matched_classes,
+      collapse = "; "
+    ),
+    hits = taxid_hits
+  )
+}
+
+
+# ============================================================
+# Safe automatic host-name cleanup
+# ============================================================
+
+.propose_automatic_host_cleanup <- function(term) {
+  
+  term <- .host_clean_term(term)
+  
+  
+  if (.host_is_invalid_tax_term(term)) {
+    return(
+      list(
+        candidate = NA_character_,
+        rule = NA_character_
+      )
+    )
+  }
+  
+  
+  original <- term
+  rules <- character(0)
+  
+  
+  # ----------------------------------------------------------
+  # Rule 1:
+  # Remove trailing botanical authority "L."
+  #
+  # Examples:
+  #   Quercus robur L.        -> Quercus robur
+  #   Heliconia aurantiaca L. -> Heliconia aurantiaca
+  # ----------------------------------------------------------
+  
+  if (
+    grepl(
+      "\\s+L\\.$",
+      term
+    )
+  ) {
+    
+    term <- sub(
+      "\\s+L\\.$",
+      "",
+      term
+    )
+    
+    term <- trimws(term)
+    
+    rules <- c(
+      rules,
+      "remove_trailing_L."
+    )
+  }
+  
+  
+  # ----------------------------------------------------------
+  # Rule 2:
+  # Remove trailing "sp." or "sp"
+  #
+  # Examples:
+  #   Sirex sp. -> Sirex
+  #   Canna sp. -> Canna
+  #
+  # NOTE:
+  # This merely generates a candidate.
+  # The candidate is NOT accepted unless it uniquely matches
+  # the local NCBI name database.
+  # ----------------------------------------------------------
+  
+  if (
+    grepl(
+      "\\s+sp\\.?$",
+      term,
+      ignore.case = TRUE
+    )
+  ) {
+    
+    term <- sub(
+      "\\s+sp\\.?$",
+      "",
+      term,
+      ignore.case = TRUE
+    )
+    
+    term <- trimws(term)
+    
+    rules <- c(
+      rules,
+      "remove_trailing_sp."
+    )
+  }
+  
+  
+  # ----------------------------------------------------------
+  # No transformation occurred
+  # ----------------------------------------------------------
+  
+  if (
+    identical(
+      term,
+      original
+    ) ||
+    !nzchar(term)
+  ) {
+    
+    return(
+      list(
+        candidate = NA_character_,
+        rule = NA_character_
+      )
+    )
+  }
+  
+  
+  list(
+    candidate = term,
+    rule = paste(
+      rules,
+      collapse = ";"
+    )
+  )
+}
+
+
+# ============================================================
+# Build and validate automatic cleanup suggestions
+#
+# Validation requirement:
+# transformed candidate must match exactly ONE TaxID in the
+# local NCBI name database.
+# ============================================================
+
+.build_automatic_host_cleanup_map <- function(
+    terms,
+    name_lookup_file = NULL
+) {
+  
+  terms <- unique(
+    .host_clean_term(
+      terms
+    )
+  )
+  
+  
+  terms <- terms[
+    !.host_is_invalid_tax_term(
+      terms
+    )
+  ]
+  
+  
+  if (length(terms) == 0) {
+    
+    return(
+      data.frame(
+        original_term = character(0),
+        suggested_replacement = character(0),
+        cleanup_rule = character(0),
+        validation_status = character(0),
+        TaxID = character(0),
+        matched_name = character(0),
+        matched_name_class = character(0),
+        stringsAsFactors = FALSE
+      )
+    )
+  }
+  
+  
+  message(
+    "Loading local NCBI name lookup for automatic host cleanup..."
+  )
+  
+  
+  name_lookup <- .read_ncbi_name_lookup(
+    name_lookup_file
+  )
+  
+  
+  rows <- list()
+  
+  
+  for (term in terms) {
+    
+    proposal <- .propose_automatic_host_cleanup(
+      term
+    )
+    
+    
+    if (
+      is.na(proposal$candidate) ||
+      !nzchar(proposal$candidate)
+    ) {
+      next
+    }
+    
+    
+    candidate <- proposal$candidate
+    
+    
+    # --------------------------------------------------------
+    # Critical safety check:
+    # candidate must uniquely resolve in local NCBI taxonomy
+    # --------------------------------------------------------
+    
+    local_match <- .lookup_local_taxid(
+      term = candidate,
+      name_lookup = name_lookup
+    )
+    
+    
+    if (local_match$status == "unique") {
+      
+      validation_status <- "unique_ncbi_match"
+      
+      taxid <- local_match$taxid
+      matched_name <- local_match$matched_name
+      matched_name_class <- local_match$matched_name_class
+      
+      
+    } else if (local_match$status == "ambiguous") {
+      
+      validation_status <- "ambiguous_ncbi_match"
+      
+      taxid <- NA_character_
+      matched_name <- NA_character_
+      matched_name_class <- NA_character_
+      
+      
+    } else {
+      
+      validation_status <- "no_ncbi_match"
+      
+      taxid <- NA_character_
+      matched_name <- NA_character_
+      matched_name_class <- NA_character_
+    }
+    
+    
+    rows[[length(rows) + 1L]] <- data.frame(
+      original_term = term,
+      suggested_replacement = candidate,
+      cleanup_rule = proposal$rule,
+      validation_status = validation_status,
+      TaxID = taxid,
+      matched_name = matched_name,
+      matched_name_class = matched_name_class,
+      stringsAsFactors = FALSE
+    )
+  }
+  
+  
+  if (length(rows) == 0) {
+    
+    return(
+      data.frame(
+        original_term = character(0),
+        suggested_replacement = character(0),
+        cleanup_rule = character(0),
+        validation_status = character(0),
+        TaxID = character(0),
+        matched_name = character(0),
+        matched_name_class = character(0),
+        stringsAsFactors = FALSE
+      )
+    )
+  }
+  
+  
+  dplyr::bind_rows(
+    rows
+  )
+}
+
+
+# ============================================================
+# Apply uniquely validated automatic cleanup to metadata
+#
+# This modifies ONLY host.standardized.
+# It does not create another host-name column.
+#
+# host.standardized.original remains untouched.
+# ============================================================
+
+.apply_automatic_host_cleanup <- function(
+    meta,
+    project_name,
+    host_dir = "./host_assessment",
+    name_lookup_file = NULL,
+    write_audit = TRUE
+) {
+  
+  if (!"host.standardized" %in% names(meta)) {
+    stop(
+      "host.standardized must exist before automatic host cleanup."
+    )
+  }
+  
+  
+  # ----------------------------------------------------------
+  # Work only on UNIQUE terms.
+  #
+  # This is important for very large metadata tables.
+  # We do NOT perform NCBI matching 1.5 million or 3.5 million
+  # times.
+  # ----------------------------------------------------------
+  
+  current_hosts <- .host_clean_term(
+    meta$host.standardized
+  )
+  
+  
+  unique_terms <- unique(
+    current_hosts[
+      !.host_is_invalid_tax_term(
+        current_hosts
+      )
+    ]
+  )
+  
+  
+  message(
+    "Checking ",
+    format(
+      length(unique_terms),
+      big.mark = ","
+    ),
+    " unique host terms for safe automatic cleanup."
+  )
+  
+  
+  cleanup_map <- .build_automatic_host_cleanup_map(
+    terms = unique_terms,
+    name_lookup_file = name_lookup_file
+  )
+  
+  
+  if (nrow(cleanup_map) == 0) {
+    
+    message(
+      "No host terms matched the automatic cleanup patterns."
+    )
+    
+    return(meta)
+  }
+  
+  
+  # ----------------------------------------------------------
+  # Add accession counts for audit purposes
+  # ----------------------------------------------------------
+  
+  term_counts <- table(
+    current_hosts
+  )
+  
+  
+  cleanup_map$accession_count <- as.integer(
+    term_counts[
+      cleanup_map$original_term
+    ]
+  )
+  
+  
+  cleanup_map$accession_count[
+    is.na(cleanup_map$accession_count)
+  ] <- 0L
+  
+  
+  cleanup_map <- cleanup_map[
+    order(
+      -cleanup_map$accession_count,
+      cleanup_map$original_term
+    ),
+    ,
+    drop = FALSE
+  ]
+  
+  
+  # ----------------------------------------------------------
+  # Write audit table
+  #
+  # This is outside the metadata table so it does not create
+  # another host column.
+  # ----------------------------------------------------------
+  
+  if (isTRUE(write_audit)) {
+    
+    if (!dir.exists(host_dir)) {
+      dir.create(
+        host_dir,
+        recursive = TRUE
+      )
+    }
+    
+    
+    audit_path <- file.path(
+      host_dir,
+      paste0(
+        "host_automatic_cleanup_",
+        project_name,
+        ".csv"
+      )
+    )
+    
+    
+    write.csv(
+      cleanup_map,
+      audit_path,
+      row.names = FALSE
+    )
+    
+    
+    message(
+      "Automatic host-cleanup audit written to: ",
+      audit_path
+    )
+  }
+  
+  
+  # ----------------------------------------------------------
+  # Accept ONLY unique NCBI matches
+  # ----------------------------------------------------------
+  
+  accepted <- cleanup_map[
+    cleanup_map$validation_status ==
+      "unique_ncbi_match",
+    ,
+    drop = FALSE
+  ]
+  
+  
+  if (nrow(accepted) == 0) {
+    
+    message(
+      "No automatic cleanup candidates had unique NCBI matches."
+    )
+    
+    return(meta)
+  }
+  
+  
+  # ----------------------------------------------------------
+  # Vectorized mapping back onto metadata
+  # ----------------------------------------------------------
+  
+  map_index <- match(
+    current_hosts,
+    accepted$original_term
+  )
+  
+  
+  rows_to_change <- !is.na(
+    map_index
+  )
+  
+  
+  meta$host.standardized[
+    rows_to_change
+  ] <- accepted$suggested_replacement[
+    map_index[
+      rows_to_change
+    ]
+  ]
+  
+  
+  changed_accessions <- sum(
+    rows_to_change
+  )
+  
+  
+  message("")
+  message(
+    "Safe automatic host cleanup complete."
+  )
+  
+  message(
+    "  Unique terms changed: ",
+    nrow(accepted)
+  )
+  
+  message(
+    "  Metadata rows changed: ",
+    format(
+      changed_accessions,
+      big.mark = ","
+    )
+  )
+  
+  message(
+    "  Ambiguous candidates left unchanged: ",
+    sum(
+      cleanup_map$validation_status ==
+        "ambiguous_ncbi_match"
+    )
+  )
+  
+  message(
+    "  Candidates without NCBI matches left unchanged: ",
+    sum(
+      cleanup_map$validation_status ==
+        "no_ncbi_match"
+    )
+  )
+  
+  
+  meta
+}
+
+
+.lookup_local_ranked_taxonomy <- function(
+    term,
+    taxid,
+    matched_name,
+    matched_name_class,
+    ranked_taxonomy
+) {
+  hit <- ranked_taxonomy[
+    ranked_taxonomy$TaxID == as.character(taxid),
+    ,
+    drop = FALSE
+  ]
+  
+  if (nrow(hit) == 0) {
+    return(NULL)
+  }
+  
+  hit <- hit[1, , drop = FALSE]
+  
+  get_value <- function(col) {
+    if (!col %in% names(hit)) {
+      return(NA_character_)
+    }
+    
+    x <- as.character(hit[[col]][1])
+    
+    if (is.na(x) || trimws(x) == "") {
+      NA_character_
+    } else {
+      x
+    }
+  }
+  
+  data.frame(
+    Host.standardized = term,
+    Host.taxid = as.character(taxid),
+    Host.matched_name = matched_name,
+    Host.matched_name_class = matched_name_class,
+    Host.lookup_source = "local_ncbi",
+    Host.superkingdom = get_value("Superkingdom"),
+    Host.kingdom = get_value("Kingdom"),
+    Host.phylum = get_value("Phylum"),
+    Host.class = get_value("Class"),
+    Host.order = get_value("Order"),
+    Host.family = get_value("Family"),
+    Host.genus = get_value("Genus"),
+    Host.species = get_value("Species"),
+    stringsAsFactors = FALSE
+  )
+}
+
+
+.empty_host_ambiguity <- function() {
+  data.frame(
+    original_term = character(0),
+    normalized_name = character(0),
+    TaxID = character(0),
+    matched_name = character(0),
+    name_class = character(0),
+    scientific_name = character(0),
+    stringsAsFactors = FALSE
+  )
+}
+
+
+.read_ambiguous_terms <- function(
+    project_name,
+    host_dir = "./host_assessment"
+) {
+  path <- .host_ambiguous_path(
+    project_name,
+    host_dir
+  )
+  
+  if (!file.exists(path)) {
+    return(
+      .empty_host_ambiguity()
+    )
+  }
+  
+  x <- read.csv(
+    path,
+    stringsAsFactors = FALSE
+  )
+  
+  # Keep TaxID type consistent with the rest of the host pipeline
+  if ("TaxID" %in% names(x)) {
+    x$TaxID <- as.character(x$TaxID)
+  }
+  
+  x
+}
+
+
+.write_ambiguous_terms <- function(
+    ambiguity_df,
+    project_name,
+    host_dir = "./host_assessment"
+) {
+  path <- .host_ambiguous_path(
+    project_name,
+    host_dir
+  )
+  
+  if (nrow(ambiguity_df) > 0) {
+    ambiguity_df <- unique(
+      ambiguity_df
+    )
+    
+    ambiguity_df <- ambiguity_df[
+      order(
+        ambiguity_df$original_term,
+        ambiguity_df$TaxID
+      ),
+      ,
+      drop = FALSE
+    ]
+  }
+  
+  write.csv(
+    ambiguity_df,
+    path,
+    row.names = FALSE
+  )
+  
+  message(
+    "Ambiguous host terms file written to: ",
+    path
+  )
+  
+  invisible(
+    ambiguity_df
+  )
+}
+
+
+.append_ambiguous_lookup <- function(
+    ambiguity_df,
+    term,
+    name_hits,
+    ranked_taxonomy
+) {
+  if (nrow(name_hits) == 0) {
+    return(ambiguity_df)
+  }
+  
+  name_hits <- name_hits |>
+    dplyr::distinct(
+      TaxID,
+      name,
+      name_class,
+      .keep_all = TRUE
+    )
+  
+  scientific_lookup <- ranked_taxonomy |>
+    dplyr::select(
+      TaxID,
+      Scientific.name
+    )
+  
+  scientific_lookup$TaxID <- as.character(
+    scientific_lookup$TaxID
+  )
+  
+  detail <- name_hits |>
+    dplyr::transmute(
+      original_term = term,
+      normalized_name = .host_normalize_name(term),
+      TaxID = as.character(TaxID),
+      matched_name = as.character(name),
+      name_class = as.character(name_class)
+    ) |>
+    dplyr::left_join(
+      scientific_lookup,
+      by = "TaxID"
+    ) |>
+    dplyr::rename(
+      scientific_name = Scientific.name
+    )
+  
+  dplyr::bind_rows(
+    ambiguity_df,
+    detail
+  ) |>
+    dplyr::distinct(
+      original_term,
+      TaxID,
+      matched_name,
+      name_class,
+      .keep_all = TRUE
+    )
+}
+
 
 
 # -----------------------------
@@ -2397,63 +10141,213 @@ merge_host_taxonomy_into_metadata <- function(
 # -----------------------------
 # Initial pass
 # -----------------------------
-
 run_host_assessment_initial_pass <- function(
     project_name,
     host_dir = "./host_assessment",
     db = "ncbi",
-    sleep_sec = 0.1,
     overwrite = FALSE,
     metadata_file = NULL,
     use_isolation_source = FALSE,
-    overwrite_host_standardized = FALSE
+    overwrite_host_standardized = FALSE,
+    use_shared_replacements = TRUE,
+    shared_replacement_file = NULL,
+    use_automatic_cleanup = TRUE,
+    use_taxize_fallback = TRUE,
+    name_lookup_file = NULL,
+    ranked_taxonomy_file = NULL
 ) {
-  if (!dir.exists(host_dir)) dir.create(host_dir, recursive = TRUE)
+  
+  if (!dir.exists(host_dir)) {
+    dir.create(
+      host_dir,
+      recursive = TRUE
+    )
+  }
+  
   
   if (is.null(metadata_file)) {
-    metadata_file <- .host_metadata_path(project_name)
+    metadata_file <- .host_metadata_path(
+      project_name
+    )
   }
+  
   
   if (!file.exists(metadata_file)) {
-    stop("Metadata file not found: ", metadata_file)
+    stop(
+      "Metadata file not found: ",
+      metadata_file
+    )
   }
   
-  message("Running host assessment initial pass...")
   
-  meta <- read.csv(metadata_file, stringsAsFactors = FALSE)
+  message(
+    "Running host assessment initial pass..."
+  )
+  
+  
+  # ============================================================
+  # 1. Read metadata
+  # ============================================================
+  
+  meta <- read.csv(
+    metadata_file,
+    stringsAsFactors = FALSE
+  )
+  
+  
+  # ============================================================
+  # 2. Initialize host.standardized
+  #
+  # host.standardized.original is preserved by
+  # .ensure_host_standardized().
+  # ============================================================
   
   meta <- .ensure_host_standardized(
     meta,
     use_isolation_source = use_isolation_source,
-    overwrite_host_standardized = overwrite_host_standardized
+    overwrite_host_standardized =
+      overwrite_host_standardized
   )
   
-  write.csv(meta, metadata_file, row.names = FALSE)
   
-  host_terms <- unique(.host_clean_term(meta$host.standardized))
+  # ============================================================
+  # 3. Apply shared reusable replacements
+  #
+  # These remain the highest-priority curated replacements.
+  # ============================================================
+  
+  meta <- .apply_shared_host_replacements(
+    meta = meta,
+    use_shared_replacements =
+      use_shared_replacements,
+    shared_replacement_file =
+      shared_replacement_file
+  )
+  
+  
+  # ============================================================
+  # 4. Safe automatic cleanup
+  #
+  # Current automatic rules:
+  #
+  #   Quercus robur L. -> Quercus robur
+  #   Sirex sp.        -> Sirex
+  #
+  # A transformed candidate is accepted ONLY when it maps to
+  # exactly one TaxID in the local NCBI name database.
+  #
+  # Failed or ambiguous transformed strings are left completely
+  # unchanged.
+  # ============================================================
+  
+  if (isTRUE(use_automatic_cleanup)) {
+    
+    meta <- .apply_automatic_host_cleanup(
+      meta = meta,
+      project_name = project_name,
+      host_dir = host_dir,
+      name_lookup_file = name_lookup_file,
+      write_audit = TRUE
+    )
+    
+  } else {
+    
+    message(
+      "Automatic host-name cleanup disabled."
+    )
+  }
+  
+  
+  # ============================================================
+  # 5. Save standardized metadata
+  # ============================================================
+  
+  write.csv(
+    meta,
+    metadata_file,
+    row.names = FALSE
+  )
+  
+  
+  # ============================================================
+  # 6. Extract unique valid standardized host terms
+  # ============================================================
+  
+  host_terms <- unique(
+    .host_clean_term(
+      meta$host.standardized
+    )
+  )
+  
+  
+  host_terms <- host_terms[
+    !.host_is_invalid_tax_term(
+      host_terms
+    )
+  ]
+  
   
   terms_path <- file.path(
     host_dir,
-    paste0("host_terms_for_taxonomy_", project_name, ".csv")
+    paste0(
+      "host_terms_for_taxonomy_",
+      project_name,
+      ".csv"
+    )
   )
   
+  
   write.csv(
-    data.frame(host = host_terms, stringsAsFactors = FALSE),
+    data.frame(
+      host = host_terms,
+      stringsAsFactors = FALSE
+    ),
     terms_path,
     row.names = FALSE
   )
   
-  message("Host terms file written to: ", terms_path)
+  
+  message(
+    "Unique standardized host terms: ",
+    length(host_terms)
+  )
+  
+  
+  message(
+    "Host terms file written to: ",
+    terms_path
+  )
+  
+  
+  # ============================================================
+  # 7. Local NCBI taxonomy lookup
+  #
+  # The local name database already contains multiple NCBI name
+  # classes. Therefore scientific names, synonyms, common names,
+  # etc. can resolve here when they uniquely identify one TaxID.
+  #
+  # taxize remains an optional fallback.
+  # ============================================================
   
   lookup_result <- .search_host_terms(
     terms = host_terms,
     project_name = project_name,
     host_dir = host_dir,
     db = db,
-    sleep_sec = sleep_sec,
     overwrite = overwrite,
-    term_type = "initial_lookup"
+    term_type = "initial_lookup",
+    use_taxize_fallback =
+      use_taxize_fallback,
+    name_lookup_file =
+      name_lookup_file,
+    ranked_taxonomy_file =
+      ranked_taxonomy_file
   )
+  
+  
+  # ============================================================
+  # 8. Merge successful taxonomy into metadata
+  # ============================================================
   
   merge_host_taxonomy_into_metadata(
     project_name = project_name,
@@ -2461,10 +10355,19 @@ run_host_assessment_initial_pass <- function(
     metadata_file = metadata_file
   )
   
-  message("Initial host assessment pass completed.")
   
-  invisible(lookup_result)
+  message(
+    "Initial host assessment pass completed."
+  )
+  
+  
+  invisible(
+    lookup_result
+  )
 }
+
+
+
 
 # -----------------------------
 # Refinement pass
@@ -2498,42 +10401,108 @@ run_host_assessment_refinement_pass <- function(
     project_name,
     host_dir = "./host_assessment",
     db = "ncbi",
-    sleep_sec = 0.1,
     overwrite = FALSE,
-    metadata_file = NULL
+    metadata_file = NULL,
+    use_taxize_fallback = TRUE,
+    name_lookup_file = NULL,
+    ranked_taxonomy_file = NULL
 ) {
-  if (!dir.exists(host_dir)) dir.create(host_dir, recursive = TRUE)
+  
+  if (!dir.exists(host_dir)) {
+    dir.create(
+      host_dir,
+      recursive = TRUE
+    )
+  }
+  
   
   if (is.null(metadata_file)) {
-    metadata_file <- .host_metadata_path(project_name)
+    metadata_file <- .host_metadata_path(
+      project_name
+    )
   }
+  
   
   if (!file.exists(metadata_file)) {
-    stop("Metadata file not found: ", metadata_file)
+    stop(
+      "Metadata file not found: ",
+      metadata_file
+    )
   }
   
-  failed_path <- .host_failed_path(project_name, host_dir)
+  
+  failed_path <- .host_failed_path(
+    project_name,
+    host_dir
+  )
+  
   
   if (!file.exists(failed_path)) {
     stop(
-      "Failed terms file not found: ", failed_path,
+      "Failed terms file not found: ",
+      failed_path,
       "\nRun run_host_assessment_initial_pass() first."
     )
   }
   
-  message("Running host assessment refinement pass...")
   
-  failed_df <- .read_failed_terms(project_name, host_dir)
-  host_taxonomy <- .read_host_taxonomy(project_name, host_dir)
+  message(
+    "Running host assessment refinement pass..."
+  )
   
-  replacement_ok <- !.host_is_invalid_tax_term(failed_df$replacement_term)
-  replacement_rows <- failed_df[replacement_ok, , drop = FALSE]
+  
+  # ============================================================
+  # 1. Read failed terms and existing taxonomy
+  # ============================================================
+  
+  failed_df <- .read_failed_terms(
+    project_name,
+    host_dir
+  )
+  
+  
+  host_taxonomy <- .read_host_taxonomy(
+    project_name,
+    host_dir
+  )
+  
+  
+  replacement_ok <- !.host_is_invalid_tax_term(
+    failed_df$replacement_term
+  )
+  
+  
+  replacement_rows <- failed_df[
+    replacement_ok,
+    ,
+    drop = FALSE
+  ]
+  
+  
+  # ============================================================
+  # Nothing supplied
+  # ============================================================
   
   if (nrow(replacement_rows) == 0) {
-    message("No replacement terms supplied yet. Nothing to refine.")
     
-    failed_df <- .add_failed_host_term_counts(failed_df, project_name, metadata_file)
-    .write_failed_terms(failed_df, project_name, host_dir)
+    message(
+      "No replacement terms supplied yet. Nothing to refine."
+    )
+    
+    
+    failed_df <- .add_failed_host_term_counts(
+      failed_df,
+      project_name,
+      metadata_file
+    )
+    
+    
+    .write_failed_terms(
+      failed_df,
+      project_name,
+      host_dir
+    )
+    
     
     merge_host_taxonomy_into_metadata(
       project_name = project_name,
@@ -2541,42 +10510,106 @@ run_host_assessment_refinement_pass <- function(
       metadata_file = metadata_file
     )
     
-    return(invisible(list(
-      taxonomy = host_taxonomy,
-      failed_table = failed_df
-    )))
+    
+    return(
+      invisible(
+        list(
+          taxonomy = host_taxonomy,
+          failed_table = failed_df
+        )
+      )
+    )
   }
   
-  replacement_terms <- unique(.host_clean_term(replacement_rows$replacement_term))
-  replacement_terms <- replacement_terms[!.host_is_invalid_tax_term(replacement_terms)]
   
-  usable_taxonomy_rows <- .has_usable_host_taxonomy(host_taxonomy)
+  # ============================================================
+  # 2. Determine replacement terms requiring taxonomy lookup
+  # ============================================================
   
-  already_have_taxonomy <- unique(
-    .host_clean_term(host_taxonomy$Host.standardized[usable_taxonomy_rows])
+  replacement_terms <- unique(
+    .host_clean_term(
+      replacement_rows$replacement_term
+    )
   )
   
+  
+  replacement_terms <- replacement_terms[
+    !.host_is_invalid_tax_term(
+      replacement_terms
+    )
+  ]
+  
+  
+  usable_taxonomy_rows <- .has_usable_host_taxonomy(
+    host_taxonomy
+  )
+  
+  
+  already_have_taxonomy <- unique(
+    .host_clean_term(
+      host_taxonomy$Host.standardized[
+        usable_taxonomy_rows
+      ]
+    )
+  )
+  
+  
   if (overwrite) {
+    
     terms_to_query <- replacement_terms
+    
   } else {
-    terms_to_query <- setdiff(replacement_terms, already_have_taxonomy)
+    
+    terms_to_query <- setdiff(
+      replacement_terms,
+      already_have_taxonomy
+    )
   }
   
-  message("Replacement terms supplied: ", length(replacement_terms))
-  message("Replacement terms already have usable taxonomy: ", length(intersect(replacement_terms, already_have_taxonomy)))
-  message("Replacement terms to query this pass: ", length(terms_to_query))
+  
+  message(
+    "Replacement terms supplied: ",
+    length(replacement_terms)
+  )
+  
+  
+  message(
+    "Replacement terms already have usable taxonomy: ",
+    length(
+      intersect(
+        replacement_terms,
+        already_have_taxonomy
+      )
+    )
+  )
+  
+  
+  message(
+    "Replacement terms to query this pass: ",
+    length(terms_to_query)
+  )
+  
+  
+  # ============================================================
+  # 3. Look up replacement taxonomy
+  # ============================================================
   
   if (length(terms_to_query) > 0) {
+    
     lookup_result <- .search_host_terms(
       terms = terms_to_query,
       project_name = project_name,
       host_dir = host_dir,
       db = db,
-      sleep_sec = sleep_sec,
       overwrite = overwrite,
-      term_type = "replacement_lookup"
+      term_type = "replacement_lookup",
+      use_taxize_fallback = use_taxize_fallback,
+      name_lookup_file = name_lookup_file,
+      ranked_taxonomy_file = ranked_taxonomy_file
     )
+    
   } else {
+    
     lookup_result <- list(
       taxonomy = host_taxonomy,
       failed_table = failed_df,
@@ -2585,85 +10618,355 @@ run_host_assessment_refinement_pass <- function(
     )
   }
   
-  host_taxonomy <- .read_host_taxonomy(project_name, host_dir)
   
-  usable_taxonomy_rows <- .has_usable_host_taxonomy(host_taxonomy)
+  # ============================================================
+  # 4. Reload taxonomy after replacement lookups
+  # ============================================================
   
-  successful_taxonomy_terms <- unique(
-    .host_clean_term(host_taxonomy$Host.standardized[usable_taxonomy_rows])
+  host_taxonomy <- .read_host_taxonomy(
+    project_name,
+    host_dir
   )
   
-  meta <- read.csv(metadata_file, stringsAsFactors = FALSE)
-  meta <- .ensure_host_standardized(meta)
   
-  if (!"host.standardized.before_refinement" %in% names(meta)) {
-    meta$host.standardized.before_refinement <- meta$host.standardized
-  }
-  
-  message("Applying successful replacement terms to metadata...")
-  
-  for (i in seq_len(nrow(replacement_rows))) {
-    original <- .host_display_term(replacement_rows$original_term[i])
-    replacement <- .host_clean_term(replacement_rows$replacement_term[i])
-    
-    if (.host_is_invalid_tax_term(replacement)) {
-      next
-    }
-    
-    replacement_has_taxonomy <- replacement %in% successful_taxonomy_terms
-    
-    if (!replacement_has_taxonomy) {
-      next
-    }
-    
-    if (original == "NA") {
-      idx <- .host_is_invalid_tax_term(meta$host.standardized)
-    } else {
-      idx <- .host_display_term(meta$host.standardized) == original |
-        .host_display_term(meta$host.standardized.original) == original
-    }
-    
-    if (any(idx, na.rm = TRUE)) {
-      meta$host.standardized[idx] <- replacement
-    }
-  }
-  
-  write.csv(meta, metadata_file, row.names = FALSE)
-  
-  failed_df <- .read_failed_terms(project_name, host_dir)
-  host_taxonomy <- .read_host_taxonomy(project_name, host_dir)
-  
-  usable_taxonomy_rows <- .has_usable_host_taxonomy(host_taxonomy)
-  
-  successful_taxonomy_terms <- unique(
-    .host_clean_term(host_taxonomy$Host.standardized[usable_taxonomy_rows])
+  usable_taxonomy_rows <- .has_usable_host_taxonomy(
+    host_taxonomy
   )
   
-  replacement_terms <- unique(.host_clean_term(failed_df$replacement_term))
-  replacement_terms <- replacement_terms[!.host_is_invalid_tax_term(replacement_terms)]
   
-  for (i in seq_len(nrow(failed_df))) {
-    replacement <- .host_clean_term(failed_df$replacement_term[i])
-    
-    if (.host_is_invalid_tax_term(replacement)) {
-      next
-    }
-    
-    if (replacement %in% successful_taxonomy_terms) {
-      failed_df$replacement_lookup_status[i] <- "replacement_successful"
-      failed_df$lookup_status[i] <- "resolved_by_replacement"
-    } else {
-      failed_df$replacement_lookup_status[i] <- "replacement_failed"
-    }
-  }
+  successful_taxonomy_terms <- unique(
+    .host_clean_term(
+      host_taxonomy$Host.standardized[
+        usable_taxonomy_rows
+      ]
+    )
+  )
   
-  failed_replacements <- replacement_terms[
-    !replacement_terms %in% successful_taxonomy_terms
+  
+  # ============================================================
+  # 5. Read large metadata table
+  #
+  # fread is substantially faster than read.csv for this dataset.
+  # ============================================================
+  
+  message(
+    "Reading metadata for replacement application..."
+  )
+  
+  
+  meta <- data.table::fread(
+    metadata_file,
+    data.table = FALSE
+  )
+  
+  
+  meta <- .ensure_host_standardized(
+    meta
+  )
+  
+  
+  # ============================================================
+  # 6. Build validated replacement map
+  #
+  # ONLY replacements with successful taxonomy are allowed.
+  # ============================================================
+  
+  replacement_map <- replacement_rows
+  
+  
+  replacement_map$original_key <- .host_display_term(
+    replacement_map$original_term
+  )
+  
+  
+  replacement_map$replacement_clean <- .host_clean_term(
+    replacement_map$replacement_term
+  )
+  
+  
+  replacement_map <- replacement_map[
+    !.host_is_invalid_tax_term(
+      replacement_map$replacement_clean
+    ) &
+      replacement_map$replacement_clean %in%
+      successful_taxonomy_terms,
+    ,
+    drop = FALSE
   ]
   
+  
+  # ------------------------------------------------------------
+  # Make sure one original term cannot point to two replacements
+  # ------------------------------------------------------------
+  
+  if (nrow(replacement_map) > 0) {
+    
+    conflict_check <- replacement_map |>
+      dplyr::group_by(
+        original_key
+      ) |>
+      dplyr::summarise(
+        n_replacements = dplyr::n_distinct(
+          replacement_clean
+        ),
+        .groups = "drop"
+      ) |>
+      dplyr::filter(
+        n_replacements > 1
+      )
+    
+    
+    if (nrow(conflict_check) > 0) {
+      
+      stop(
+        "Conflicting replacement terms were found for the same original host term:\n  ",
+        paste(
+          head(
+            conflict_check$original_key,
+            20
+          ),
+          collapse = "\n  "
+        )
+      )
+    }
+    
+    
+    replacement_map <- replacement_map[
+      !duplicated(
+        replacement_map$original_key
+      ),
+      ,
+      drop = FALSE
+    ]
+  }
+  
+  
+  message(
+    "Validated replacement mappings available: ",
+    nrow(replacement_map)
+  )
+  
+  
+  # ============================================================
+  # 7. Apply replacements VECTORIZED
+  #
+  # This replaces the old per-replacement/per-1.5-million-row
+  # loop.
+  # ============================================================
+  
+  message(
+    "Applying successful replacement terms to metadata..."
+  )
+  
+  
+  if (nrow(replacement_map) > 0) {
+    
+    current_key <- .host_display_term(
+      meta$host.standardized
+    )
+    
+    
+    original_key <- if (
+      "host.standardized.original" %in% names(meta)
+    ) {
+      
+      .host_display_term(
+        meta$host.standardized.original
+      )
+      
+    } else {
+      
+      current_key
+    }
+    
+    
+    # First prefer the CURRENT standardized value.
+    current_match <- match(
+      current_key,
+      replacement_map$original_key
+    )
+    
+    
+    # If that does not match, try the preserved original value.
+    original_match <- match(
+      original_key,
+      replacement_map$original_key
+    )
+    
+    
+    replacement_index <- current_match
+    
+    
+    use_original_match <- is.na(
+      replacement_index
+    ) &
+      !is.na(
+        original_match
+      )
+    
+    
+    replacement_index[
+      use_original_match
+    ] <- original_match[
+      use_original_match
+    ]
+    
+    
+    rows_to_change <- !is.na(
+      replacement_index
+    )
+    
+    
+    n_rows_changed <- sum(
+      rows_to_change
+    )
+    
+    
+    n_terms_used <- length(
+      unique(
+        replacement_index[
+          rows_to_change
+        ]
+      )
+    )
+    
+    
+    if (n_rows_changed > 0) {
+      
+      meta$host.standardized[
+        rows_to_change
+      ] <- replacement_map$replacement_clean[
+        replacement_index[
+          rows_to_change
+        ]
+      ]
+    }
+    
+    
+    message(
+      "Replacement application complete."
+    )
+    
+    
+    message(
+      "  Unique replacement mappings used: ",
+      n_terms_used
+    )
+    
+    
+    message(
+      "  Metadata rows changed: ",
+      format(
+        n_rows_changed,
+        big.mark = ","
+      )
+    )
+    
+  } else {
+    
+    message(
+      "No validated replacement mappings were available to apply."
+    )
+  }
+  
+  
+  # ============================================================
+  # 8. Update failed-term statuses
+  # ============================================================
+  
+  failed_df <- .read_failed_terms(
+    project_name,
+    host_dir
+  )
+  
+  
+  host_taxonomy <- .read_host_taxonomy(
+    project_name,
+    host_dir
+  )
+  
+  
+  usable_taxonomy_rows <- .has_usable_host_taxonomy(
+    host_taxonomy
+  )
+  
+  
+  successful_taxonomy_terms <- unique(
+    .host_clean_term(
+      host_taxonomy$Host.standardized[
+        usable_taxonomy_rows
+      ]
+    )
+  )
+  
+  
+  replacement_clean <- .host_clean_term(
+    failed_df$replacement_term
+  )
+  
+  
+  has_replacement <- !.host_is_invalid_tax_term(
+    replacement_clean
+  )
+  
+  
+  replacement_success <- has_replacement &
+    replacement_clean %in%
+    successful_taxonomy_terms
+  
+  
+  replacement_failed <- has_replacement &
+    !replacement_success
+  
+  
+  failed_df$replacement_lookup_status[
+    replacement_success
+  ] <- "replacement_successful"
+  
+  
+  failed_df$lookup_status[
+    replacement_success
+  ] <- "resolved_by_replacement"
+  
+  
+  failed_df$replacement_lookup_status[
+    replacement_failed
+  ] <- "replacement_failed"
+  
+  
+  # ============================================================
+  # 9. Add failed replacement terms if needed
+  # ============================================================
+  
+  failed_replacements <- unique(
+    replacement_clean[
+      replacement_failed
+    ]
+  )
+  
+  
+  failed_replacements <- failed_replacements[
+    !.host_is_invalid_tax_term(
+      failed_replacements
+    )
+  ]
+  
+  
   if (length(failed_replacements) > 0) {
-    message("Replacement terms that still failed taxonomy lookup:")
-    message("  - ", paste(failed_replacements, collapse = "\n  - "))
+    
+    message(
+      "Replacement terms that still failed taxonomy lookup:"
+    )
+    
+    
+    message(
+      "  - ",
+      paste(
+        failed_replacements,
+        collapse = "\n  - "
+      )
+    )
+    
     
     failed_df <- .append_failed_terms(
       failed_df,
@@ -2673,23 +10976,152 @@ run_host_assessment_refinement_pass <- function(
     )
   }
   
-  failed_df <- .add_failed_host_term_counts(failed_df, project_name, metadata_file)
   
-  .write_failed_terms(failed_df, project_name, host_dir)
+  # ============================================================
+  # 10. Update failed-term accession counts IN MEMORY
+  #
+  # Avoid rereading the giant metadata CSV.
+  # ============================================================
   
-  merge_host_taxonomy_into_metadata(
-    project_name = project_name,
-    host_dir = host_dir,
-    metadata_file = metadata_file
+  message(
+    "Updating failed-term accession counts..."
   )
   
-  message("Refinement pass completed.")
   
-  invisible(list(
-    taxonomy = .read_host_taxonomy(project_name, host_dir),
-    failed_table = failed_df,
-    lookup_result = lookup_result
-  ))
+  host_display <- .host_display_term(
+    meta$host.standardized
+  )
+  
+  
+  count_table <- as.data.frame(
+    table(
+      host_display
+    ),
+    stringsAsFactors = FALSE
+  )
+  
+  
+  names(count_table) <- c(
+    "original_term",
+    "accession_count"
+  )
+  
+  
+  failed_df <- .ensure_failed_columns(
+    failed_df
+  )
+  
+  
+  failed_df$accession_count <- count_table$accession_count[
+    match(
+      failed_df$original_term,
+      count_table$original_term
+    )
+  ]
+  
+  
+  failed_df$accession_count[
+    is.na(
+      failed_df$accession_count
+    )
+  ] <- 0L
+  
+  
+  .write_failed_terms(
+    failed_df,
+    project_name,
+    host_dir
+  )
+  
+  
+  # ============================================================
+  # 11. Merge taxonomy into metadata IN MEMORY
+  #
+  # Avoid writing metadata, rereading it, then writing it again.
+  # ============================================================
+  
+  message(
+    "Merging host taxonomy into metadata..."
+  )
+  
+  
+  host_taxonomy <- .read_host_taxonomy(
+    project_name,
+    host_dir
+  )
+  
+  
+  taxonomy_cols <- .host_taxonomy_cols()
+  
+  
+  taxonomy_value_cols <- setdiff(
+    taxonomy_cols,
+    "Host.standardized"
+  )
+  
+  
+  host_key <- .host_clean_term(
+    meta$host.standardized
+  )
+  
+  
+  taxonomy_key <- .host_clean_term(
+    host_taxonomy$Host.standardized
+  )
+  
+  
+  taxonomy_match <- match(
+    host_key,
+    taxonomy_key
+  )
+  
+  
+  for (col in taxonomy_value_cols) {
+    
+    meta[[col]] <- host_taxonomy[[col]][
+      taxonomy_match
+    ]
+  }
+  
+  
+  # ============================================================
+  # 12. Write metadata ONCE
+  # ============================================================
+  
+  message(
+    "Writing updated metadata to:"
+  )
+  
+  message(
+    "  ",
+    metadata_file
+  )
+  
+  
+  data.table::fwrite(
+    meta,
+    metadata_file,
+    na = "NA"
+  )
+  
+  
+  message(
+    "Updated metadata written successfully."
+  )
+  
+  
+  message(
+    "Refinement pass completed."
+  )
+  
+  
+  invisible(
+    list(
+      taxonomy = host_taxonomy,
+      failed_table = failed_df,
+      lookup_result = lookup_result
+    )
+  )
 }
 
 
@@ -2734,31 +11166,1460 @@ run_host_assessment_summary <- function(
 }
 
 
+# ============================================================
+# Advanced host-name extraction / cleanup
+#
+# Purpose:
+#   Recover valid NCBI taxa from messy host metadata such as:
+#
+#   cucumber fruit (Cucumis sativus L.)
+#       -> Cucumis sativus
+#
+#   on dead branches of Camellia sinensis
+#       -> Camellia sinensis
+#
+#   pearl millet stem
+#       -> Cenchrus americanus, if "pearl millet" uniquely
+#          resolves to that TaxID in the local NCBI name table
+#
+# Safety:
+#   - Candidates are generated liberally.
+#   - Automatic replacement occurs ONLY when all valid
+#     candidates resolve to exactly one TaxID.
+#   - Multiple taxa are never automatically collapsed.
+#   - Uncertain strings containing "or" or "(?)" are review-only.
+#
+# This does NOT create any additional host columns.
+# ============================================================
 
 
-# final data merge and summary creation
-run_host_assessment_summary <- function(
-    project_name,
-    fungal_rank = "genus",
-    host_rank   = "phylum",
-    keep_NAs    = FALSE,
-    host_dir    = "./host_assessment"
-) {
+.host_candidate_clean_text <- function(x) {
   
-  summary <- summarize_host_usage(
-    project_name = project_name,
-    fungal_rank = fungal_rank,
-    host_rank = host_rank,
-    keep_NAs = keep_NAs,
-    host_dir = host_dir
-    # metadata_file intentionally NOT exposed
+  x <- as.character(x)
+  
+  # HTML line breaks
+  x <- gsub(
+    "(?i)<br\\s*/?>",
+    " ",
+    x,
+    perl = TRUE
   )
   
-  invisible(summary)
+  # Non-breaking spaces
+  x <- gsub(
+    "\u00A0",
+    " ",
+    x,
+    fixed = TRUE
+  )
+  
+  # Treat some obvious accidental separators as spaces
+  # Example:
+  #   Panax?notoginseng
+  # becomes:
+  #   Panax notoginseng
+  x <- gsub(
+    "[?+|/\\\\]",
+    " ",
+    x
+  )
+  
+  # Remove grouping punctuation while retaining the text inside
+  x <- gsub(
+    "[()\\[\\]\\{\\}\"']",
+    " ",
+    x,
+    perl = TRUE
+  )
+  
+  # Other separators
+  x <- gsub(
+    "[:;,]",
+    " ",
+    x
+  )
+  
+  # Collapse whitespace
+  x <- gsub(
+    "[[:space:]]+",
+    " ",
+    x
+  )
+  
+  trimws(x)
 }
 
 
+.host_candidate_segments <- function(x) {
+  
+  x <- as.character(x)
+  
+  # Split obvious multi-host / multi-part strings.
+  #
+  # Examples:
+  #   Cedrus deodara and Pinus wallichiana
+  #   Quercus alba or Pinus strobus
+  #   Sphagnum, Betula & Picea spp.
+  
+  parts <- unlist(
+    strsplit(
+      x,
+      "(?i)\\s*(?:;|,|&|\\band\\b|\\bor\\b|<br\\s*/?>)\\s*",
+      perl = TRUE
+    )
+  )
+  
+  parts <- trimws(parts)
+  parts <- parts[nzchar(parts)]
+  
+  unique(parts)
+}
 
+
+.host_descriptor_candidates <- function(x) {
+  
+  x <- .host_candidate_clean_text(x)
+  
+  if (!nzchar(x)) {
+    return(character(0))
+  }
+  
+  candidates <- x
+  
+  
+  # ----------------------------------------------------------
+  # Remove trailing cultivar notation
+  # ----------------------------------------------------------
+  
+  y <- gsub(
+    "(?i)\\s+(?:cultivar|cv\\.?)\\s+.*$",
+    "",
+    x,
+    perl = TRUE
+  )
+  
+  y <- trimws(y)
+  
+  if (nzchar(y) && y != x) {
+    candidates <- c(
+      candidates,
+      y
+    )
+  }
+  
+  
+  # ----------------------------------------------------------
+  # Progressively strip sample / tissue descriptors
+  #
+  # Keeping intermediate versions is important.
+  #
+  # Curry leaf plant
+  #
+  # gives:
+  #   Curry leaf plant
+  #   Curry leaf
+  #   Curry
+  #
+  # If "Curry leaf" is an NCBI common name, that version can
+  # succeed without incorrectly reducing it all the way to Curry.
+  # ----------------------------------------------------------
+  
+  suffix_pattern <- paste0(
+    "(?i)\\s+(?:",
+    paste(
+      c(
+        "roots?",
+        "leaf",
+        "leaves",
+        "stems?",
+        "fruits?",
+        "surface",
+        "bark",
+        "branches?",
+        "bulbs?",
+        "spore[- ]capsules?",
+        "ears?",
+        "plants?"
+      ),
+      collapse = "|"
+    ),
+    ")$"
+  )
+  
+  current <- x
+  
+  for (i in seq_len(5)) {
+    
+    new_value <- sub(
+      suffix_pattern,
+      "",
+      current,
+      perl = TRUE
+    )
+    
+    new_value <- trimws(
+      new_value
+    )
+    
+    if (
+      !nzchar(new_value) ||
+      new_value == current
+    ) {
+      break
+    }
+    
+    candidates <- c(
+      candidates,
+      new_value
+    )
+    
+    current <- new_value
+  }
+  
+  
+  # ----------------------------------------------------------
+  # Simple leading contextual phrases
+  # ----------------------------------------------------------
+  
+  leading_patterns <- c(
+    "(?i)^isolated from\\s+",
+    "(?i)^collected from\\s+",
+    "(?i)^obtained from\\s+",
+    "(?i)^hosted on\\s+",
+    "(?i)^from\\s+",
+    "(?i)^on\\s+"
+  )
+  
+  for (pat in leading_patterns) {
+    
+    new_value <- sub(
+      pat,
+      "",
+      x,
+      perl = TRUE
+    )
+    
+    new_value <- trimws(
+      new_value
+    )
+    
+    if (
+      nzchar(new_value) &&
+      new_value != x
+    ) {
+      candidates <- c(
+        candidates,
+        new_value
+      )
+    }
+  }
+  
+  
+  unique(
+    candidates[
+      nzchar(candidates)
+    ]
+  )
+}
+
+
+.generate_host_candidates_one <- function(
+    term,
+    max_ngram = 5
+) {
+  
+  term <- trimws(
+    as.character(term)
+  )
+  
+  rows <- list()
+  
+  
+  add_candidate <- function(
+      candidate,
+      method,
+      priority
+  ) {
+    
+    candidate <- trimws(
+      as.character(candidate)
+    )
+    
+    if (
+      is.na(candidate) ||
+      !nzchar(candidate) ||
+      toupper(candidate) == "NA"
+    ) {
+      return(invisible(NULL))
+    }
+    
+    rows[[length(rows) + 1L]] <<- data.frame(
+      original_term = term,
+      candidate = candidate,
+      candidate_method = method,
+      method_priority = priority,
+      stringsAsFactors = FALSE
+    )
+    
+    invisible(NULL)
+  }
+  
+  
+  cleaned <- .host_candidate_clean_text(
+    term
+  )
+  
+  
+  # ==========================================================
+  # A. Embedded binomial / infraspecific names
+  # ==========================================================
+  
+  # Examples:
+  #
+  #   cucumber fruit Cucumis sativus L.
+  #                  ^^^^^^^^^^^^^^^^
+  #
+  #   Taxus chinensis Pilg. Rehder
+  #   ^^^^^^^^^^^^^^^
+  
+  binomial_pattern <- paste0(
+    "\\b",
+    "[A-Z][A-Za-z-]{2,}",
+    "\\s+",
+    "[a-z][A-Za-z-]{1,}",
+    "(?:",
+      "\\s+",
+      "(?:subsp\\.?|ssp\\.?|var\\.?|f\\.?)",
+      "\\s+",
+      "[A-Za-z-]{1,}",
+    ")?"
+  )
+  
+  binomial_hits <- stringr::str_extract_all(
+    cleaned,
+    binomial_pattern
+  )[[1]]
+  
+  binomial_hits <- unique(
+    binomial_hits[
+      !is.na(binomial_hits) &
+        nzchar(binomial_hits)
+    ]
+  )
+  
+  if (length(binomial_hits) > 0) {
+    
+    for (candidate in binomial_hits) {
+      
+      add_candidate(
+        candidate,
+        "embedded_scientific_name",
+        1
+      )
+    }
+  }
+  
+  
+  # ==========================================================
+  # B. Genus sp. / genus spp.
+  # ==========================================================
+  
+  genus_sp_pattern <- paste0(
+    "\\b",
+    "([A-Z][A-Za-z-]{2,})",
+    "\\s+",
+    "spp?\\.?",
+    "\\b"
+  )
+  
+  genus_sp_hits <- stringr::str_match_all(
+    cleaned,
+    genus_sp_pattern
+  )[[1]]
+  
+  if (
+    !is.null(genus_sp_hits) &&
+    nrow(genus_sp_hits) > 0
+  ) {
+    
+    genus_values <- unique(
+      genus_sp_hits[, 2]
+    )
+    
+    genus_values <- genus_values[
+      !is.na(genus_values) &
+        nzchar(genus_values)
+    ]
+    
+    for (candidate in genus_values) {
+      
+      add_candidate(
+        candidate,
+        "embedded_genus_sp",
+        2
+      )
+    }
+  }
+  
+  
+  # ==========================================================
+  # C. Genus followed by "hybrid"
+  #
+  # Vitis hybrid cultivar; Prairie Star
+  # -> Vitis
+  # ==========================================================
+  
+  hybrid_hits <- stringr::str_match_all(
+    cleaned,
+    "\\b([A-Z][A-Za-z-]{2,})\\s+hybrid\\b"
+  )[[1]]
+  
+  if (
+    !is.null(hybrid_hits) &&
+    nrow(hybrid_hits) > 0
+  ) {
+    
+    hybrid_values <- unique(
+      hybrid_hits[, 2]
+    )
+    
+    hybrid_values <- hybrid_values[
+      !is.na(hybrid_values) &
+        nzchar(hybrid_values)
+    ]
+    
+    for (candidate in hybrid_values) {
+      
+      add_candidate(
+        candidate,
+        "hybrid_genus",
+        2
+      )
+    }
+  }
+  
+  
+  # ==========================================================
+  # D. Single scientific-looking taxon after context words
+  #
+  # on dead Bambusa
+  # -> Bambusa
+  #
+  # ... of Salix
+  # -> Salix
+  # ==========================================================
+  
+  context_pattern <- paste0(
+    "(?:(?i:on|of|under|with|from))",
+    "\\s+",
+    "(?:dead\\s+)?",
+    "(?:branches?\\s+of\\s+)?",
+    "([A-Z][A-Za-z-]{2,})",
+    "\\b"
+  )
+  
+  context_hits <- stringr::str_match_all(
+    cleaned,
+    context_pattern
+  )[[1]]
+  
+  if (
+    !is.null(context_hits) &&
+    nrow(context_hits) > 0
+  ) {
+    
+    context_values <- unique(
+      context_hits[, 2]
+    )
+    
+    context_values <- context_values[
+      !is.na(context_values) &
+        nzchar(context_values)
+    ]
+    
+    for (candidate in context_values) {
+      
+      add_candidate(
+        candidate,
+        "context_single_taxon",
+        3
+      )
+    }
+  }
+  
+  
+  # ==========================================================
+  # E. Split multi-part strings
+  #
+  # Allows detection of:
+  #
+  #   Tsuga canadensis or Betula
+  #
+  # where Betula would otherwise be missed.
+  # ==========================================================
+  
+  segments <- .host_candidate_segments(
+    term
+  )
+  
+  for (segment in segments) {
+    
+    segment_clean <- .host_candidate_clean_text(
+      segment
+    )
+    
+    segment_binomial <- stringr::str_extract_all(
+      segment_clean,
+      binomial_pattern
+    )[[1]]
+    
+    segment_genus_sp <- stringr::str_match_all(
+      segment_clean,
+      genus_sp_pattern
+    )[[1]]
+    
+    has_segment_taxon <-
+      length(segment_binomial) > 0 ||
+      (
+        !is.null(segment_genus_sp) &&
+        nrow(segment_genus_sp) > 0
+      )
+    
+    
+    # If an entire segment is just one capitalized word,
+    # treat it as a possible taxon.
+    #
+    # Example:
+    #
+    #   Tsuga canadensis OR Betula
+    #                       ^^^^^^
+    
+    if (
+      !has_segment_taxon &&
+      grepl(
+        "^[A-Z][A-Za-z-]{2,}$",
+        segment_clean
+      )
+    ) {
+      
+      add_candidate(
+        segment_clean,
+        "bare_segment_taxon",
+        3
+      )
+    }
+  }
+  
+  
+  scientific_style_methods <- c(
+    "embedded_scientific_name",
+    "embedded_genus_sp",
+    "hybrid_genus",
+    "context_single_taxon",
+    "bare_segment_taxon"
+  )
+  
+  currently_scientific <- FALSE
+  
+  if (length(rows) > 0) {
+    
+    currently_scientific <- any(
+      vapply(
+        rows,
+        function(x) {
+          x$candidate_method[1] %in%
+            scientific_style_methods
+        },
+        logical(1)
+      )
+    )
+  }
+  
+  
+  # ==========================================================
+  # F. Common-name / descriptive phrase recovery
+  #
+  # Only use this when we have not already found a plausible
+  # scientific-looking taxon.
+  #
+  # Examples:
+  #
+  #   pearl millet stem
+  #   Curry leaf plant
+  #   Tomato plant roots
+  #   Human ear
+  # ==========================================================
+  
+  if (!currently_scientific) {
+    
+    descriptor_candidates <-
+      .host_descriptor_candidates(
+        term
+      )
+    
+    for (candidate in descriptor_candidates) {
+      
+      add_candidate(
+        candidate,
+        "descriptor_cleanup",
+        4
+      )
+    }
+    
+    
+    # --------------------------------------------------------
+    # Short contiguous phrases
+    #
+    # These are checked directly against the local NCBI names
+    # table, including common names.
+    # --------------------------------------------------------
+    
+    stop_words <- c(
+      "a",
+      "an",
+      "the",
+      "on",
+      "in",
+      "of",
+      "from",
+      "under",
+      "near",
+      "with",
+      "and",
+      "or",
+      "cultivar",
+      "cv",
+      "sp",
+      "spp"
+    )
+    
+    
+    for (segment in segments) {
+      
+      segment_clean <- .host_candidate_clean_text(
+        segment
+      )
+      
+      tokens <- unlist(
+        strsplit(
+          segment_clean,
+          "[[:space:]]+"
+        )
+      )
+      
+      tokens <- tokens[
+        nzchar(tokens)
+      ]
+      
+      if (length(tokens) < 2) {
+        next
+      }
+      
+      maximum_n <- min(
+        max_ngram,
+        length(tokens)
+      )
+      
+      for (n in seq.int(2, maximum_n)) {
+        
+        starts <- seq_len(
+          length(tokens) - n + 1L
+        )
+        
+        for (start in starts) {
+          
+          end <- start + n - 1L
+          
+          words <- tokens[
+            start:end
+          ]
+          
+          if (
+            tolower(words[1]) %in% stop_words ||
+            tolower(words[length(words)]) %in% stop_words
+          ) {
+            next
+          }
+          
+          candidate <- paste(
+            words,
+            collapse = " "
+          )
+          
+          add_candidate(
+            candidate,
+            "ncbi_phrase",
+            5
+          )
+        }
+      }
+    }
+  }
+  
+  
+  # ==========================================================
+  # No candidates
+  # ==========================================================
+  
+  if (length(rows) == 0) {
+    
+    return(
+      data.frame(
+        original_term = character(0),
+        candidate = character(0),
+        candidate_method = character(0),
+        method_priority = integer(0),
+        stringsAsFactors = FALSE
+      )
+    )
+  }
+  
+  
+  out <- dplyr::bind_rows(
+    rows
+  )
+  
+  
+  out$candidate_key <- .host_normalize_name(
+    out$candidate
+  )
+  
+  
+  out <- out[
+    !duplicated(
+      paste(
+        out$candidate_key,
+        out$candidate_method,
+        sep = "|||"
+      )
+    ),
+    ,
+    drop = FALSE
+  ]
+  
+  
+  out
+}
+
+
+.build_embedded_host_replacement_map <- function(
+    terms,
+    name_lookup_file = NULL,
+    ranked_taxonomy_file = NULL
+) {
+  
+  terms <- unique(
+    .host_clean_term(
+      terms
+    )
+  )
+  
+  terms <- terms[
+    !.host_is_invalid_tax_term(
+      terms
+    )
+  ]
+  
+  
+  if (length(terms) == 0) {
+    return(data.frame())
+  }
+  
+  
+  message(
+    "Generating candidate taxa from ",
+    format(
+      length(terms),
+      big.mark = ","
+    ),
+    " host term(s)..."
+  )
+  
+  
+  candidate_list <- lapply(
+    terms,
+    .generate_host_candidates_one
+  )
+  
+  
+  candidate_df <- dplyr::bind_rows(
+    candidate_list
+  )
+  
+  
+  if (nrow(candidate_df) == 0) {
+    return(data.frame())
+  }
+  
+  
+  message(
+    "Generated ",
+    format(
+      nrow(candidate_df),
+      big.mark = ","
+    ),
+    " candidate phrase(s)."
+  )
+  
+  
+  # ==========================================================
+  # Load local NCBI names
+  # ==========================================================
+  
+  name_lookup <- .read_ncbi_name_lookup(
+    name_lookup_file
+  )
+  
+  
+  ranked_taxonomy <- .read_ncbi_ranked_taxonomy(
+    ranked_taxonomy_file
+  )
+  
+  
+  candidate_keys <- unique(
+    candidate_df$candidate_key
+  )
+  
+  
+  # Reduce the huge NCBI table BEFORE joining.
+  relevant_names <- name_lookup[
+    name_lookup$normalized_name %in%
+      candidate_keys,
+    c(
+      "TaxID",
+      "name",
+      "name_class",
+      "normalized_name"
+    ),
+    drop = FALSE
+  ]
+  
+  
+  if (nrow(relevant_names) > 0) {
+    
+    hits <- merge(
+      candidate_df,
+      relevant_names,
+      by.x = "candidate_key",
+      by.y = "normalized_name",
+      all = FALSE,
+      sort = FALSE
+    )
+    
+  } else {
+    
+    hits <- data.frame()
+  }
+  
+  
+  # ==========================================================
+  # Single-word candidates must be actual scientific names.
+  #
+  # This prevents ordinary words that happen to occur in the
+  # NCBI name table from being treated as taxa.
+  # ==========================================================
+  
+  if (nrow(hits) > 0) {
+    
+    single_methods <- c(
+      "embedded_genus_sp",
+      "hybrid_genus",
+      "context_single_taxon",
+      "bare_segment_taxon"
+    )
+    
+    single_rows <- hits$candidate_method %in%
+      single_methods
+    
+    scientific_name_rows <- tolower(
+      hits$name_class
+    ) == "scientific name"
+    
+    hits <- hits[
+      !single_rows |
+        scientific_name_rows,
+      ,
+      drop = FALSE
+    ]
+  }
+  
+  
+  # ==========================================================
+  # Canonical scientific name for each matched TaxID
+  # ==========================================================
+  
+  canonical_lookup <- ranked_taxonomy[
+    ,
+    c(
+      "TaxID",
+      "Scientific.name"
+    ),
+    drop = FALSE
+  ]
+  
+  canonical_lookup$TaxID <- as.character(
+    canonical_lookup$TaxID
+  )
+  
+  canonical_lookup <- canonical_lookup[
+    !duplicated(
+      canonical_lookup$TaxID
+    ),
+    ,
+    drop = FALSE
+  ]
+  
+  
+  if (nrow(hits) > 0) {
+    
+    hits$TaxID <- as.character(
+      hits$TaxID
+    )
+    
+    hits <- dplyr::left_join(
+      hits,
+      canonical_lookup,
+      by = "TaxID"
+    )
+  }
+  
+  
+  # Split hits for faster term-wise processing
+  hit_split <- if (nrow(hits) > 0) {
+    split(
+      hits,
+      hits$original_term
+    )
+  } else {
+    list()
+  }
+  
+  
+  # ==========================================================
+  # Summarize each original host term
+  # ==========================================================
+  
+  output_rows <- lapply(
+    terms,
+    function(term) {
+      
+      this_hits <- hit_split[[term]]
+      
+      
+      # ------------------------------------------------------
+      # Flags
+      # ------------------------------------------------------
+      
+      uncertain <- grepl(
+        "\\bor\\b|\\(\\s*\\?\\s*\\)",
+        term,
+        ignore.case = TRUE,
+        perl = TRUE
+      )
+      
+      likely_non_taxonomic <- grepl(
+        paste0(
+          "(?i)\\b(",
+          paste(
+            c(
+              "bulk soil",
+              "soil",
+              "sediment",
+              "decaying wood",
+              "submerged decaying wood",
+              "scorched earth",
+              "sand",
+              "clay",
+              "meadow",
+              "forest",
+              "rhizosphere"
+            ),
+            collapse = "|"
+          ),
+          ")\\b"
+        ),
+        term,
+        perl = TRUE
+      )
+      
+      
+      # ------------------------------------------------------
+      # Nothing matched NCBI
+      # ------------------------------------------------------
+      
+      if (
+        is.null(this_hits) ||
+        nrow(this_hits) == 0
+      ) {
+        
+        status <- if (
+          likely_non_taxonomic
+        ) {
+          "likely_non_taxonomic"
+        } else {
+          "no_ncbi_candidate"
+        }
+        
+        return(
+          data.frame(
+            original_term = term,
+            suggested_replacement = NA_character_,
+            resolution_status = status,
+            TaxID = NA_character_,
+            chosen_candidate = NA_character_,
+            candidate_method = NA_character_,
+            matched_name = NA_character_,
+            matched_name_class = NA_character_,
+            all_detected_taxids = NA_character_,
+            all_detected_candidates = NA_character_,
+            stringsAsFactors = FALSE
+          )
+        )
+      }
+      
+      
+      unique_taxids <- unique(
+        this_hits$TaxID[
+          !is.na(this_hits$TaxID) &
+            nzchar(this_hits$TaxID)
+        ]
+      )
+      
+      
+      # ------------------------------------------------------
+      # Multiple different taxa detected
+      # ------------------------------------------------------
+      
+      if (length(unique_taxids) > 1) {
+        
+        return(
+          data.frame(
+            original_term = term,
+            suggested_replacement = NA_character_,
+            resolution_status = "multiple_taxa_detected",
+            TaxID = NA_character_,
+            chosen_candidate = NA_character_,
+            candidate_method = NA_character_,
+            matched_name = NA_character_,
+            matched_name_class = NA_character_,
+            all_detected_taxids = paste(
+              unique_taxids,
+              collapse = "; "
+            ),
+            all_detected_candidates = paste(
+              unique(
+                this_hits$candidate
+              ),
+              collapse = "; "
+            ),
+            stringsAsFactors = FALSE
+          )
+        )
+      }
+      
+      
+      # ------------------------------------------------------
+      # Exactly one TaxID
+      # ------------------------------------------------------
+      
+      taxid <- unique_taxids[1]
+      
+      
+      # Prefer stronger candidate-generation methods.
+      class_priority <- ifelse(
+        tolower(
+          this_hits$name_class
+        ) == "scientific name",
+        1L,
+        2L
+      )
+      
+      ordering <- order(
+        this_hits$method_priority,
+        class_priority,
+        -nchar(
+          this_hits$candidate
+        )
+      )
+      
+      chosen <- this_hits[
+        ordering[1],
+        ,
+        drop = FALSE
+      ]
+      
+      
+      canonical_name <- chosen$Scientific.name[1]
+      
+      if (
+        is.na(canonical_name) ||
+        !nzchar(canonical_name)
+      ) {
+        canonical_name <- chosen$name[1]
+      }
+      
+      
+      status <- if (
+        uncertain
+      ) {
+        "review_uncertain"
+      } else {
+        "auto_safe"
+      }
+      
+      
+      data.frame(
+        original_term = term,
+        suggested_replacement = canonical_name,
+        resolution_status = status,
+        TaxID = taxid,
+        chosen_candidate = chosen$candidate[1],
+        candidate_method = chosen$candidate_method[1],
+        matched_name = chosen$name[1],
+        matched_name_class = chosen$name_class[1],
+        all_detected_taxids = taxid,
+        all_detected_candidates = paste(
+          unique(
+            this_hits$candidate
+          ),
+          collapse = "; "
+        ),
+        stringsAsFactors = FALSE
+      )
+    }
+  )
+  
+  
+  dplyr::bind_rows(
+    output_rows
+  )
+}
+
+
+# ============================================================
+# Run advanced extraction against the FAILED TERM TABLE
+#
+# This is the version to use first on the current fungal
+# dataset.
+#
+# apply_suggestions = FALSE:
+#   preview only
+#
+# apply_suggestions = TRUE:
+#   fills replacement_term ONLY for auto_safe rows
+#
+# The large metadata file is NOT altered by this function.
+# ============================================================
+
+suggest_embedded_host_replacements <- function(
+    project_name,
+    host_dir = "./host_assessment",
+    name_lookup_file = NULL,
+    ranked_taxonomy_file = NULL,
+    apply_suggestions = FALSE,
+    overwrite_existing_replacements = FALSE
+) {
+  
+  failed_df <- .read_failed_terms(
+    project_name,
+    host_dir
+  )
+  
+  
+  if (nrow(failed_df) == 0) {
+    message(
+      "No failed host terms found."
+    )
+    return(invisible(NULL))
+  }
+  
+  
+  has_replacement <- !.host_is_invalid_tax_term(
+    failed_df$replacement_term
+  )
+  
+  
+  eligible <- if (
+    overwrite_existing_replacements
+  ) {
+    rep(
+      TRUE,
+      nrow(failed_df)
+    )
+  } else {
+    !has_replacement
+  }
+  
+  
+  eligible <- eligible &
+    !.host_is_invalid_tax_term(
+      failed_df$original_term
+    )
+  
+  
+  terms <- unique(
+    failed_df$original_term[
+      eligible
+    ]
+  )
+  
+  
+  message(
+    "Unresolved failed terms being examined: ",
+    format(
+      length(terms),
+      big.mark = ","
+    )
+  )
+  
+  
+  result <- .build_embedded_host_replacement_map(
+    terms = terms,
+    name_lookup_file = name_lookup_file,
+    ranked_taxonomy_file = ranked_taxonomy_file
+  )
+  
+  
+  if (nrow(result) == 0) {
+    message(
+      "No candidate replacements were generated."
+    )
+    return(invisible(NULL))
+  }
+  
+  
+  # ----------------------------------------------------------
+  # Add accession counts
+  # ----------------------------------------------------------
+  
+  count_lookup <- failed_df[
+    ,
+    c(
+      "original_term",
+      "accession_count"
+    ),
+    drop = FALSE
+  ]
+  
+  count_lookup <- count_lookup[
+    !duplicated(
+      count_lookup$original_term
+    ),
+    ,
+    drop = FALSE
+  ]
+  
+  
+  result$accession_count <- suppressWarnings(
+    as.numeric(
+      count_lookup$accession_count[
+        match(
+          result$original_term,
+          count_lookup$original_term
+        )
+      ]
+    )
+  )
+  
+  
+  result$accession_count[
+    is.na(result$accession_count)
+  ] <- 0
+  
+  
+  result <- result[
+    order(
+      factor(
+        result$resolution_status,
+        levels = c(
+          "auto_safe",
+          "review_uncertain",
+          "multiple_taxa_detected",
+          "likely_non_taxonomic",
+          "no_ncbi_candidate"
+        )
+      ),
+      -result$accession_count,
+      result$original_term
+    ),
+    ,
+    drop = FALSE
+  ]
+  
+  
+  preview_path <- file.path(
+    host_dir,
+    paste0(
+      "host_embedded_name_suggestions_",
+      project_name,
+      ".csv"
+    )
+  )
+  
+  
+  write.csv(
+    result,
+    preview_path,
+    row.names = FALSE
+  )
+  
+  
+  message(
+    "Embedded-name suggestion table written to: ",
+    preview_path
+  )
+  
+  
+  message("")
+  message("Summary:")
+  
+  status_table <- table(
+    result$resolution_status
+  )
+  
+  for (status in names(status_table)) {
+    message(
+      "  ",
+      status,
+      ": ",
+      status_table[[status]]
+    )
+  }
+  
+  
+  safe <- result[
+    result$resolution_status ==
+      "auto_safe",
+    ,
+    drop = FALSE
+  ]
+  
+  
+  message(
+    "  Accessions represented by auto-safe replacements: ",
+    format(
+      sum(
+        safe$accession_count,
+        na.rm = TRUE
+      ),
+      big.mark = ","
+    )
+  )
+  
+  
+  # ----------------------------------------------------------
+  # Preview only
+  # ----------------------------------------------------------
+  
+  if (!isTRUE(apply_suggestions)) {
+    
+    message("")
+    message(
+      "Preview only. No replacement terms were changed."
+    )
+    
+    return(
+      invisible(result)
+    )
+  }
+  
+  
+  # ----------------------------------------------------------
+  # Apply only auto-safe replacements
+  # ----------------------------------------------------------
+  
+  if (nrow(safe) == 0) {
+    
+    message(
+      "No auto-safe replacements are available to apply."
+    )
+    
+    return(
+      invisible(result)
+    )
+  }
+  
+  
+  for (i in seq_len(nrow(safe))) {
+    
+    original <- safe$original_term[i]
+    replacement <- safe$suggested_replacement[i]
+    
+    idx <- which(
+      failed_df$original_term ==
+        original
+    )
+    
+    if (!overwrite_existing_replacements) {
+      
+      idx <- idx[
+        .host_is_invalid_tax_term(
+          failed_df$replacement_term[idx]
+        )
+      ]
+    }
+    
+    if (length(idx) == 0) {
+      next
+    }
+    
+    
+    failed_df$replacement_term[idx] <-
+      replacement
+    
+    
+    note <- paste0(
+      "automatic embedded-name recovery: ",
+      safe$candidate_method[i],
+      " [",
+      safe$chosen_candidate[i],
+      "]"
+    )
+    
+    
+    for (j in idx) {
+      
+      if (
+        is.na(failed_df$notes[j]) ||
+        !nzchar(
+          trimws(
+            failed_df$notes[j]
+          )
+        )
+      ) {
+        
+        failed_df$notes[j] <- note
+        
+      } else {
+        
+        failed_df$notes[j] <- paste(
+          failed_df$notes[j],
+          note,
+          sep = "; "
+        )
+      }
+    }
+  }
+  
+  
+  .write_failed_terms(
+    failed_df,
+    project_name,
+    host_dir
+  )
+  
+  
+  message(
+    "Auto-safe replacements were added to the failed-term table."
+  )
+  
+  message(
+    "The metadata table has not been modified."
+  )
+  
+  
+  invisible(result)
+}
 
 
 # ============================================================
@@ -5128,31 +14989,602 @@ iqtree_multigene_partitioned <- function(
 # arborist extra wrappers
 # ============================================================
 
-# aquiring accessions + data from NCBI
-ncbi_data_fetch <- function(taxa_list,
-                            max_acc_per_taxa = "max",
-                            organism_scope   = NULL,
-                            include_filters  = NULL,
-                            exclude_filters  = NULL,
-                            project_name     = get0("project_name", envir = .GlobalEnv)) {
+# tree tip annotation
+
+make_tree_host_annotation_table <- function(
+    tree_file,
+    metadata_file,
+    host_ranks = c("kingdom"),
+    output_dir = dirname(tree_file),
+    output_prefix = NULL
+) {
+  if (!requireNamespace("ape", quietly = TRUE)) stop("Package 'ape' is required.")
+  if (!requireNamespace("dplyr", quietly = TRUE)) stop("Package 'dplyr' is required.")
+  if (!file.exists(tree_file)) stop("Tree file not found: ", tree_file)
+  if (!file.exists(metadata_file)) stop("Metadata file not found: ", metadata_file)
+  if (!dir.exists(output_dir)) dir.create(output_dir, recursive = TRUE)
   
-  if (is.null(project_name) || !nzchar(project_name)) {
-    stop("project_name is not set. Run start_project(project_name) first, or pass project_name explicitly.")
+  if (is.null(output_prefix)) {
+    output_prefix <- tools::file_path_sans_ext(basename(tree_file))
   }
   
-  # 1) Fetch accessions
-  accession_list <- get_accessions_for_all_taxa(
-    taxa_list        = taxa_list,
-    max_acc_per_taxa = max_acc_per_taxa,
-    organism_scope   = organism_scope,
-    include_filters  = include_filters,
-    exclude_filters  = exclude_filters
+  host_cols <- paste0("Host.", host_ranks)
+  
+  meta <- read.csv(metadata_file, stringsAsFactors = FALSE)
+  
+  required_cols <- c(
+    "Accession",
+    "org_name",
+    "strain.standard",
+    "strain.standard.type",
+    host_cols
   )
   
-  # 2) Fetch metadata for those accessions
-  retrieve_ncbi_metadata(project_name)
+  missing_cols <- setdiff(required_cols, names(meta))
+  if (length(missing_cols) > 0) {
+    stop("Missing required metadata columns: ", paste(missing_cols, collapse = ", "))
+  }
   
-  invisible(accession_list)
+  clean_value <- function(x) {
+    x <- as.character(x)
+    x[is.na(x)] <- ""
+    trimws(x)
+  }
+  
+  normalize_tip_text <- function(x) {
+    x <- as.character(x)
+    x <- gsub("^>|^'", "", x)
+    x <- gsub("'$", "", x)
+    x <- gsub("[[:space:]]+", "_", x)
+    x <- gsub("[^A-Za-z0-9_.-]+", "", x)
+    x
+  }
+  
+  collapse_unique_nonempty <- function(x) {
+    x <- clean_value(x)
+    x <- sort(unique(x[x != ""]))
+    paste(x, collapse = ";")
+  }
+  
+  count_unique_nonempty <- function(x) {
+    x <- clean_value(x)
+    length(unique(x[x != ""]))
+  }
+  
+  meta$org_name <- clean_value(meta$org_name)
+  meta$strain.standard <- clean_value(meta$strain.standard)
+  meta$strain.standard.type <- clean_value(meta$strain.standard.type)
+  
+  for (col in host_cols) {
+    meta[[col]] <- clean_value(meta[[col]])
+  }
+  
+  meta$strain_label_for_tree <- ifelse(
+    meta$strain.standard.type != "",
+    meta$strain.standard.type,
+    meta$strain.standard
+  )
+  
+  meta$expected_tip_label <- paste0(
+    gsub(" ", ".", meta$org_name),
+    "_",
+    meta$strain_label_for_tree
+  )
+  
+  meta$expected_tip_label_norm <- normalize_tip_text(meta$expected_tip_label)
+  
+  strain_host_summary <- meta %>%
+    dplyr::filter(
+      org_name != "",
+      strain_label_for_tree != ""
+    ) %>%
+    dplyr::group_by(
+      org_name,
+      strain_label_for_tree,
+      expected_tip_label,
+      expected_tip_label_norm
+    ) %>%
+    dplyr::summarise(
+      accession_count = dplyr::n(),
+      accessions = paste(sort(unique(Accession)), collapse = ";"),
+      dplyr::across(
+        dplyr::all_of(host_cols),
+        collapse_unique_nonempty,
+        .names = "{.col}_values"
+      ),
+      dplyr::across(
+        dplyr::all_of(host_cols),
+        count_unique_nonempty,
+        .names = "{.col}_n_values"
+      ),
+      .groups = "drop"
+    )
+  
+  for (rank in host_ranks) {
+    values_col <- paste0("Host.", rank, "_values")
+    n_col <- paste0("Host.", rank, "_n_values")
+    assignment_col <- paste0("host_", rank)
+    conflict_col <- paste0("host_", rank, "_conflict")
+    
+    strain_host_summary[[assignment_col]] <- dplyr::case_when(
+      strain_host_summary[[n_col]] == 0 ~ NA_character_,
+      strain_host_summary[[n_col]] == 1 ~ strain_host_summary[[values_col]],
+      strain_host_summary[[n_col]] > 1 ~ "CONFLICT"
+    )
+    
+    strain_host_summary[[conflict_col]] <- strain_host_summary[[n_col]] > 1
+  }
+  
+  conflict_cols <- paste0("host_", host_ranks, "_conflict")
+  
+  conflict_report <- strain_host_summary %>%
+    dplyr::filter(rowSums(dplyr::across(dplyr::all_of(conflict_cols))) > 0)
+  
+  tree <- ape::read.tree(tree_file)
+  
+  tip_df <- data.frame(
+    tip_label = tree$tip.label,
+    tip_label_norm = normalize_tip_text(tree$tip.label),
+    stringsAsFactors = FALSE
+  )
+  
+  annotation_rows <- lapply(seq_len(nrow(tip_df)), function(i) {
+    tip <- tip_df$tip_label[i]
+    tip_norm <- tip_df$tip_label_norm[i]
+    
+    exact_hits <- strain_host_summary[
+      strain_host_summary$expected_tip_label_norm == tip_norm,
+      ,
+      drop = FALSE
+    ]
+    
+    if (nrow(exact_hits) == 1) {
+      hit <- exact_hits[1, ]
+      match_type <- "exact"
+    } else if (nrow(exact_hits) > 1) {
+      hit <- exact_hits[1, ]
+      match_type <- "multiple_exact_matches"
+    } else {
+      contained_hits <- strain_host_summary[
+        vapply(
+          strain_host_summary$expected_tip_label_norm,
+          function(x) {
+            grepl(x, tip_norm, fixed = TRUE) || grepl(tip_norm, x, fixed = TRUE)
+          },
+          logical(1)
+        ),
+        ,
+        drop = FALSE
+      ]
+      
+      if (nrow(contained_hits) == 1) {
+        hit <- contained_hits[1, ]
+        match_type <- "partial"
+      } else if (nrow(contained_hits) > 1) {
+        hit <- contained_hits[1, ]
+        match_type <- "multiple_partial_matches"
+      } else {
+        out <- data.frame(
+          tip_label = tip,
+          matched_metadata_label = NA_character_,
+          org_name = NA_character_,
+          strain_label_for_tree = NA_character_,
+          accession_count = NA_integer_,
+          accessions = NA_character_,
+          match_type = "unmatched",
+          stringsAsFactors = FALSE
+        )
+        
+        for (rank in host_ranks) {
+          out[[paste0("host_", rank)]] <- NA_character_
+          out[[paste0("host_", rank, "_conflict")]] <- NA
+        }
+        
+        return(out)
+      }
+    }
+    
+    out <- data.frame(
+      tip_label = tip,
+      matched_metadata_label = hit$expected_tip_label,
+      org_name = hit$org_name,
+      strain_label_for_tree = hit$strain_label_for_tree,
+      accession_count = hit$accession_count,
+      accessions = hit$accessions,
+      match_type = match_type,
+      stringsAsFactors = FALSE
+    )
+    
+    for (rank in host_ranks) {
+      out[[paste0("host_", rank)]] <- hit[[paste0("host_", rank)]]
+      out[[paste0("host_", rank, "_conflict")]] <- hit[[paste0("host_", rank, "_conflict")]]
+    }
+    
+    out
+  })
+  
+  annotation_table <- dplyr::bind_rows(annotation_rows)
+  
+  rank_tag <- paste(host_ranks, collapse = ".")
+  
+  annotation_path <- file.path(
+    output_dir,
+    paste0(output_prefix, "_tip_host_annotation_", rank_tag, ".csv")
+  )
+  
+  conflict_path <- file.path(
+    output_dir,
+    paste0(output_prefix, "_host_conflicts_", rank_tag, ".csv")
+  )
+  
+  unmatched_path <- file.path(
+    output_dir,
+    paste0(output_prefix, "_unmatched_tips_", rank_tag, ".csv")
+  )
+  
+  write.csv(annotation_table, annotation_path, row.names = FALSE)
+  write.csv(conflict_report, conflict_path, row.names = FALSE)
+  write.csv(
+    annotation_table[annotation_table$match_type == "unmatched", , drop = FALSE],
+    unmatched_path,
+    row.names = FALSE
+  )
+  
+  message("Tip host annotation table written to: ", annotation_path)
+  message("Host conflict report written to: ", conflict_path)
+  message("Unmatched tip report written to: ", unmatched_path)
+  message("Tips in tree: ", nrow(tip_df))
+  message("Matched tips: ", sum(annotation_table$match_type != "unmatched"))
+  message("Unmatched tips: ", sum(annotation_table$match_type == "unmatched"))
+  message("Host conflicts: ", nrow(conflict_report))
+  
+  invisible(list(
+    annotation_table = annotation_table,
+    conflict_report = conflict_report,
+    unmatched_tips = annotation_table[annotation_table$match_type == "unmatched", , drop = FALSE]
+  ))
+}
+
+make_rank_palette <- function(x, palette_name = "Dark 3") {
+  vals <- sort(unique(na.omit(as.character(x))))
+  vals <- vals[vals != ""]
+  
+  cols <- grDevices::hcl.colors(
+    n = length(vals),
+    palette = palette_name
+  )
+  
+  stats::setNames(cols, vals)
+}
+
+# aquiring accessions + data from NCBI
+ncbi_data_fetch <- function(
+    taxa_list,
+    max_acc_per_taxa = "max",
+    organism_scope = NULL,
+    include_filters = NULL,
+    exclude_filters = NULL,
+    ncbi_database = "nucleotide",
+    project_name = get0(
+      "project_name",
+      envir = .GlobalEnv
+    ),
+    accession_checkpoint_every = 500,
+    accession_fetch_batch_size = 500,
+    accession_page_max_retries = 3,
+    accession_retry_wait = 5,
+    accession_max_history_refreshes = 3,
+    metadata_checkpoint_every = 500,
+    metadata_progress_every = 5,
+    resume = TRUE,
+    overwrite_accession_checkpoints = FALSE,
+    metadata_batch_size = 250
+) {
+  
+  if (
+    is.null(project_name) ||
+    !nzchar(project_name)
+  ) {
+    
+    stop(
+      "project_name is not set. ",
+      "Run start_project(project_name) first, ",
+      "or pass project_name explicitly."
+    )
+  }
+  
+  
+  # ============================================================
+  # Resolve and remember NCBI database
+  # ============================================================
+  
+  ncbi_database <- normalize_ncbi_database(
+    ncbi_database
+  )
+  
+  
+  assign(
+    "ncbi_database",
+    ncbi_database,
+    envir = .GlobalEnv
+  )
+  
+  
+  message(
+    "\n============================================================"
+  )
+  
+  message(
+    "NCBI DATA SOURCE: ",
+    toupper(ncbi_database)
+  )
+  
+  message(
+    "============================================================"
+  )
+  
+  
+  # Automatically locate and register an NCBI API key
+  configure_entrez_key()
+  
+  
+  # ============================================================
+  # If the user explicitly wants accession checkpoints
+  # overwritten, also remove any old completion marker.
+  # ============================================================
+  
+  if (
+    overwrite_accession_checkpoints &&
+    file.exists(
+      accession_completion_file()
+    )
+  ) {
+    
+    message(
+      "Removing existing accession completion marker because ",
+      "overwrite_accession_checkpoints = TRUE."
+    )
+    
+    
+    file.remove(
+      accession_completion_file()
+    )
+  }
+  
+  
+  # ============================================================
+  # 1. Check whether accession retrieval is really complete
+  # ============================================================
+  
+  retrieval_complete <- (
+    resume &&
+      !overwrite_accession_checkpoints &&
+      accession_retrieval_is_complete(
+        taxa_list = taxa_list,
+        ncbi_database = ncbi_database
+      )
+  )
+  
+  
+  # ============================================================
+  # Reuse completed accession manifest
+  # ============================================================
+  
+  if (retrieval_complete) {
+    
+    message(
+      "\nAccession retrieval has already been completed for all ",
+      length(taxa_list),
+      " search group(s) from ",
+      ncbi_database,
+      "."
+    )
+    
+    
+    message(
+      "Skipping individual accession checkpoint checks."
+    )
+    
+    
+    accession_path <-
+      "./intermediate_files/all_pulled_accessions.csv"
+    
+    
+    accession_list <- read.csv(
+      accession_path,
+      stringsAsFactors = FALSE,
+      colClasses = "character"
+    )
+    
+    
+    if (
+      !"Accession" %in%
+      names(accession_list)
+    ) {
+      
+      stop(
+        "Existing accession manifest is missing the Accession column: ",
+        accession_path
+      )
+    }
+    
+    
+    if (
+      "ncbi_database" %in%
+      names(accession_list)
+    ) {
+      
+      manifest_databases <- unique(
+        accession_list$ncbi_database[
+          !is.na(
+            accession_list$ncbi_database
+          ) &
+            nzchar(
+              accession_list$ncbi_database
+            )
+        ]
+      )
+      
+      
+      if (
+        length(manifest_databases) > 0 &&
+        any(
+          manifest_databases !=
+          ncbi_database
+        )
+      ) {
+        
+        stop(
+          "Existing accession manifest belongs to a different NCBI database."
+        )
+      }
+    }
+    
+    
+    message(
+      "Loaded ",
+      nrow(accession_list),
+      " unique accession(s) from existing manifest."
+    )
+    
+    
+  } else {
+    
+    # ==========================================================
+    # The completion marker either does not exist or failed
+    # validation.
+    #
+    # Remove only the stale marker.
+    #
+    # IMPORTANT:
+    # Do NOT delete per-search-group accession checkpoints here.
+    # They may contain valid partial progress.
+    # ==========================================================
+    
+    if (
+      file.exists(
+        accession_completion_file()
+      ) &&
+      !overwrite_accession_checkpoints
+    ) {
+      
+      message(
+        "Removing stale or invalid accession completion marker."
+      )
+      
+      
+      file.remove(
+        accession_completion_file()
+      )
+    }
+    
+    
+    # ==========================================================
+    # Retrieve / resume accessions
+    # ==========================================================
+    
+    accession_list <-
+      get_accessions_for_all_taxa(
+        taxa_list =
+          taxa_list,
+        max_acc_per_taxa =
+          max_acc_per_taxa,
+        organism_scope =
+          organism_scope,
+        include_filters =
+          include_filters,
+        exclude_filters =
+          exclude_filters,
+        checkpoint_every =
+          accession_checkpoint_every,
+        resume =
+          resume,
+        overwrite =
+          overwrite_accession_checkpoints,
+        accession_fetch_batch_size =
+          accession_fetch_batch_size,
+        page_max_retries =
+          accession_page_max_retries,
+        retry_wait =
+          accession_retry_wait,
+        max_history_refreshes =
+          accession_max_history_refreshes,
+        ncbi_database =
+          ncbi_database
+      )
+    
+    
+    # ==========================================================
+    # Sanity check before declaring accession retrieval complete
+    # ==========================================================
+    
+    if (
+      is.null(accession_list) ||
+      nrow(accession_list) == 0
+    ) {
+      
+      stop(
+        "Accession retrieval returned zero accessions. ",
+        "A completion marker will NOT be written."
+      )
+    }
+    
+    
+    # ==========================================================
+    # Only write the completion marker after all search groups
+    # have successfully completed.
+    # ==========================================================
+    
+    write_accession_completion_marker(
+      taxa_list =
+        taxa_list,
+      accession_file =
+        "./intermediate_files/all_pulled_accessions.csv",
+      ncbi_database =
+        ncbi_database
+    )
+  }
+  
+  
+  # ============================================================
+  # Final accession sanity check before starting metadata
+  # ============================================================
+  
+  if (
+    is.null(accession_list) ||
+    nrow(accession_list) == 0
+  ) {
+    
+    stop(
+      "Accession manifest contains zero accessions. ",
+      "Metadata retrieval will not be started."
+    )
+  }
+  
+  
+  # ============================================================
+  # 2. Fetch metadata
+  # ============================================================
+  
+  retrieve_ncbi_metadata(
+    project_name =
+      project_name,
+    resume =
+      resume,
+    checkpoint_every =
+      metadata_checkpoint_every,
+    progress_every =
+      metadata_progress_every,
+    metadata_batch_size =
+      metadata_batch_size,
+    ncbi_database =
+      ncbi_database
+  )
+  
+  
+  invisible(
+    accession_list
+  )
 }
 
 
