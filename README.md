@@ -799,7 +799,7 @@ Terms that could not be confidently assigned during the initial pass are written
 
 The failed-term file preserves unresolved terms so they can be reviewed without repeating the entire initial host assessment. aRborist also tracks how many accessions are associated with each failed term, which can be useful for prioritizing terms that affect large portions of the dataset.
 
-### 2a: Automatic processing of failed host terms** 
+### 2a: Automatic processing of failed host terms
 
 Before manually editing every failed term, aRborist can attempt to recover recognizable taxonomic names embedded within messy host metadata. 
 
