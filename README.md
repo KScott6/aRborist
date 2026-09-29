@@ -292,7 +292,8 @@ I create these extra pipelines primarily for my own projects, making them as nee
 ---
 
 # aRborist Phylogenetic tree pipeline
-## includes fasta generation
+
+The aRborist phylogenetic tree pipeline uses the sequence and metadata collected during the main aRborist workflow to prepare datasets for phylogenetic analysis. The pipeline identifies and standardizes gene regions, selects accessions for the desired loci, and generates an strain-by-locus table (referred to throughout aRborist as the **"region attendance sheet"**) that provides an easy way to review and edit which sequences will be included in the analysis. It then generates region-specific multifasta files containing the selected NCBI sequences. These multifastas can be used independently for downstream analyses or passed through the rest of the aRborist pipeline for alignment with MAFFT, trimming with TrimAl, and maximum-likelihood phylogenetic inference with IQ-TREE.
 
 <br>
 
@@ -464,7 +465,7 @@ This step produces:
 
 So if you are trying to include a particular accession, but you find that a duplicate entry or entires keeps being used in place of your desired accession, you can specify to remove those particular accessions with the "acc_to_exclude" option, like so:
 
-> acc_to_exclude = "PP46469,PP464690"
+> acc_to_exclude <- c("PP464689", "PP464690")
 
 <br>
 
@@ -526,7 +527,7 @@ If you created this column, when running the next step (create_multifastas) you 
 
 ## 5) Create multifastas
 
-To create multifastas that contain the RAW sequence data from NCBI, run this command:
+To create one multifasta per region containing the unaligned nucleotide sequences downloaded from NCBI, run:
 
 ```R
 create_multifastas(
@@ -561,9 +562,9 @@ Important parameters:
 
 `threads` : how many CPUs MAFFT will use. Defaults to all but one available core. 
 
-`extra_args` : allows you to pass different MAFFT parameters. For example:
+`mafft_args` : allows you to pass different MAFFT parameters. For example:
    - "auto" : automatically selects the best algorithm based on the number and length of sequences
-   - "--reorder" : lets MAFFT rearrange sequences internally to speed up the alignment
+   - "--reorder" : (recommeneded) Allows MAFFT to reorder the output sequences according to their alignment relationships rather than preserving input order.
    - check out the MAFFT manual for more options
 
 `force` : if TRUE, will overwrite preexisting alignment files in the project folder
@@ -576,7 +577,7 @@ Note:  Before proceeding further, I recommened checking the alignments with a al
 
 ## 7) Trim each region
 
-After alignment, many columns in the alignment may contain mostly gaps or poorly aligned positions. We also need to ensure that all the sequences for a particular region are the same length. aRborist uses TrimAl to perform these steps. 
+After alignment, some alignment columns may contain excessive gaps, poorly aligned positions, or little phylogenetic information. aRborist uses TrimAl to remove alignment positions according to the trimming criteria you specify. Depending on the selected TrimAl options, poorly represented sequences may also be removed.
 
 The step is run with:
 
@@ -629,7 +630,7 @@ and determines which accessions successfully made it into the final trimmed alig
 
 Once you have trimmed alignments for each gene, the next step is to generate individual maximum-likelihood trees for each of your specified regions. If you are only interested in making a phylogeny from a single region, you can stop after this step as you will have your final tree.
 
-If you are going to make a multi-gene tree, this step is still essential to identify the best substitution model for region region, as well as helping you find problematic loci, identify outliers, and confirm that sequences are behaving as expected before concatenation. 
+For multi-gene analyses in this pipeline, this step also identifies the substitution model used for each region and lets you inspect individual gene trees for problematic loci or outlying sequences before concatenation.
 
 This is how you create the single-gene trees with your trimmed alignments:
 
