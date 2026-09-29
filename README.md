@@ -8,8 +8,8 @@ aRborist is an automated sequence and metadata harvester designed to simplify th
 
 After using aRborist to download and curate metadata/sequence data, you can choose to use downstream aRborist functions to:
 
-1) [Create a phylogenetic tree](#arborist_phylogenetic_tree_pipeline), or 
-2) [Evalute the host incidence across to your taxa of interest](#arborist_host_assessment_pipeline)
+1. [Create a phylogenetic tree](#arborist-phylogenetic-tree-pipeline), or
+2. [Evaluate host incidence across your taxa of interest](#arborist-host-assessment-pipeline).
 
 
 ### aRborist Requirements
